@@ -1,0 +1,158 @@
+[
+    {
+        "name": "cat",
+        "aliases": [],
+        "help": "Gets a random cat image",
+        "coins": 10
+    },
+    {
+        "name": "meow",
+        "aliases": [],
+        "help": "Guess the breed of a cat",
+        "coins": 10
+    },
+    {
+        "name": "woof",
+        "aliases": [],
+        "help": "Guess the breed of a dog",
+        "coins": 10
+    },
+    {
+        "name": "laser",
+        "aliases": [],
+        "help": null,
+        "coins": 20
+    },
+    {
+        "name": "ping",
+        "aliases": [],
+        "help": null,
+        "coins": 20
+    },
+    {
+        "name": "dog",
+        "aliases": [],
+        "help": "Gets a random dog image",
+        "coins": 10
+    },
+    {
+        "name": "plotster",
+        "aliases": [],
+        "help": "Bollywood game function",
+        "coins": 30
+    },
+    {
+        "name": "bingo",
+        "aliases": [],
+        "help": "Bingo!",
+        "coins": 30
+    },
+    {
+        "name": "kiss",
+        "aliases": [],
+        "help": null,
+        "coins": 10
+    },
+    {
+        "name": "breedme",
+        "aliases": [],
+        "help": "Which breed of dog are you?",
+        "coins": 10
+    },
+    {
+        "name": "signup",
+        "aliases": [],
+        "help": "Signup for various commands.",
+        "coins": 0
+    },
+    {
+        "name": "ship",
+        "aliases": [],
+        "help": "Ship command to ship people",
+        "coins": 20
+    },
+    {
+        "name": "age",
+        "aliases": [],
+        "help": "Guess the age of a user",
+        "coins": 0
+    },
+    {
+        "name": "test",
+        "aliases": [],
+        "help": null,
+        "coins": 0
+    },
+    {
+        "name": "quizster",
+        "aliases": [],
+        "help": "Quiz based on bollywood movies",
+        "coins": 30
+    },
+    {
+        "name": "change_prefix",
+        "aliases": [],
+        "help": "Change your server's prefix to whatever you like. Default is ",
+        "coins": 0
+    },
+    {
+        "name": "help",
+        "aliases": [],
+        "help": "Shows help",
+        "coins": 1
+    },
+    {
+        "name": "tictactoe",
+        "aliases": [],
+        "help": "TIC TAC TOE",
+        "coins": 20
+    },
+    {
+        "name": "leaderboard",
+        "aliases": [],
+        "help": "See the leaderboard of a particular command",
+        "coins": 0
+    },
+    {
+        "name": "meowme",
+        "aliases": [],
+        "help": "Which breed of cat are you?",
+        "coins": 10
+    },
+    {
+        "name": "bollywood",
+        "aliases": [],
+        "help": "A Hangman like game but for bollywood movies!",
+        "coins": 30
+    },
+    {
+        "name": "suggest",
+        "aliases": [],
+        "help": "Feedback to the author",
+        "coins": 0
+    },
+    {
+	"name": "cartoon",
+	"aliases": [],
+	"help": "Cartoon",
+	"coins": 10
+    },
+    {
+	"name": "cartoonme",
+	"aliases": [],
+	"help": "Which cartoon character are you?",
+	"coins": 20
+    },
+    {
+	"name": "balance",
+	"aliases": [],
+	"help": "balance",
+	"coins": 0
+    },
+    {
+	"name": "flood",
+	"aliases": [],
+	"help": "flood",
+	"coins": 10
+    }
+]
