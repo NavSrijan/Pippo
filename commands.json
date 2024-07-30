@@ -154,5 +154,11 @@
 	"aliases": [],
 	"help": "flood",
 	"coins": 10
+    },
+    {
+	"name" "poster",
+	"aliases": [],
+	"help": "Poster",
+	"coins": 30
     }
 ]
