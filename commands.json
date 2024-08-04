@@ -156,7 +156,7 @@
 	"coins": 10
     },
     {
-	"name" "poster",
+	"name": "poster",
 	"aliases": [],
 	"help": "Poster",
 	"coins": 30
