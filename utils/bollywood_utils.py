@@ -307,7 +307,7 @@ def game_start_embed(game_type, help_mode=False):
         url = "https://media.discordapp.net/attachments/1092244601525510154/1140271390226927647/movie-2545676_1280.png?width=976&height=660"
     description = "Basic hangman rules.\nYou have **9** tries to guess the movie.\nYou have **3** lives.\nEach player gains individual letter points.\nCosts:\nHint: 1 try\nRandom Letter: 2 tries\nSynopsis: 5 tries"
     if not help_mode:
-        description += "\n\n**STARTING IN 5 SECODNS.**"
+        description += "\n\n**STARTING IN 5 SECONDS.**"
 
     embed = discord.Embed(
         title=title,
