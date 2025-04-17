@@ -174,6 +174,150 @@ class Games(commands.Cog):
         "Play Name, Place, Animal and Thing with your friend, like you used to do in school."
         await ctx.reply("Work in progress.")
 
+    @commands.hybrid_command(name="clash")
+    @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
+    async def ai_clash(self, ctx):
+        "Fight with your opponent using any object, character, or anything."
+        
+        # Create UI components for the clash game
+        class ClashSubmitView(discord.ui.View):
+            def __init__(self, timeout=120):
+                super().__init__(timeout=timeout)
+                self.submissions = {}
+                self.message = None
+            
+            @discord.ui.button(label="Submit Creation", style=discord.ButtonStyle.primary)
+            async def submit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                # Create a modal for user submission
+                modal = ClashSubmitModal(self)
+                await interaction.response.send_modal(modal)
+                
+        class ClashSubmitModal(discord.ui.Modal, title="Submit Your Creation"):
+            creation = discord.ui.TextInput(
+                label="What will you fight with?",
+                placeholder="Enter any object, concept, or character...",
+                required=True,
+                max_length=100
+            )
+            
+            def __init__(self, view):
+                super().__init__()
+                self.view = view
+            
+            async def on_submit(self, interaction: discord.Interaction):
+                user_id = interaction.user.id
+                self.view.submissions[user_id] = self.creation.value
+                
+                # Acknowledge the submission
+                await interaction.response.send_message(f"Your creation '{self.creation.value}' has been submitted!", ephemeral=True)
+                
+                # Update the main message
+                participants = []
+                for uid in self.view.submissions:
+                    user = interaction.client.get_user(uid)
+                    participants.append(f"✅ @{user.display_name}")
+                
+                # Update the embed with current submissions
+                embed = discord.Embed(
+                    title="Clash of Creations",
+                    description=f"Submissions received:\n" + "\n".join(participants) + "\n\nThink of an object or concept you want to fight with.",
+                    color=discord.Color.green()
+                )
+                await self.view.message.edit(embed=embed)
+                
+                # If we have 2 submissions, proceed with the clash after a short delay
+                if len(self.view.submissions) >= 2:
+                    await asyncio.sleep(2)  # Give a moment for users to see the final submission state
+                    self.view.stop()
+        
+        # Placeholder function for AI judging (to be implemented later)
+        async def judge_clash(player1, player1_creation, player2, player2_creation):
+            """Placeholder for AI judgment of clash submissions"""
+            # This would eventually use an AI model to determine the winner
+            # For now, using a simple random choice with creative reason
+            winner = random.choice([player1, player2])
+            loser = player2 if winner == player1 else player1
+            winner_creation = player1_creation if winner == player1 else player2_creation
+            loser_creation = player2_creation if winner == player1 else player1_creation
+            
+            # Generate a more creative reason based on the creations
+            reasons = [
+                f"{winner_creation} absorbs the secret, making it deliciously illegible. Plus, who can resist warm, buttery carbs?",
+                f"{winner_creation} overwhelms {loser_creation} with its superior capabilities and strategic advantage.",
+                f"The sheer power of {winner_creation} is too much for {loser_creation} to handle in direct combat.",
+                f"{winner_creation} uses an unexpected technique that {loser_creation} simply cannot counter."
+            ]
+            
+            reason = random.choice(reasons)
+            return winner, reason
+        
+        # Execute clash
+        try:
+            # Display welcome message and rules
+            welcome_embed = discord.Embed(
+                title="Welcome to Clash of Creations! ⚔️", 
+                description=(
+                    "**How to Play:**\n"
+                    "1. This is a **creative duel** between two players!\n"
+                    "2. **Submit any object, concept, or person** you want to fight with\n"
+                    "3. An **AI judge** 🤖 will determine the winner\n\n"
+                    "⏱️ **You have two minutes to submit your creation**\n"
+                    "Players who don't submit in time will forfeit the match\n\n"
+                    "Ready to duel? Click 'Submit Creation' to begin!"
+                ),
+                color=discord.Color.gold()
+            )
+            
+            # Create and send the view with the submit button
+            view = ClashSubmitView()
+            view.message = await ctx.send(embed=welcome_embed, view=view)
+            
+            # Wait for submissions (timeout handled by the view)
+            timed_out = await view.wait()
+            
+            # If timed out or not enough participants
+            if timed_out or len(view.submissions) < 2:
+                await ctx.send("Not enough players submitted their creations in time. The clash has been canceled.")
+                return
+            
+            # Get the first two players who submitted
+            player_ids = list(view.submissions.keys())[:2]
+            player1 = ctx.guild.get_member(player_ids[0])
+            player2 = ctx.guild.get_member(player_ids[1])
+            player1_creation = view.submissions[player_ids[0]]
+            player2_creation = view.submissions[player_ids[1]]
+            
+            # Arena announcement
+            arena_embed = discord.Embed(
+                title="The Arena 🏟️",
+                description=f"• @{player1.display_name}: {player1_creation}\n• @{player2.display_name}: {player2_creation}",
+                color=discord.Color.red()
+            )
+            # You can add an image here if you have arena images
+            await ctx.send(embed=arena_embed)
+            
+            # Add a short delay for suspense
+            await asyncio.sleep(2)
+            
+            # Judge the clash
+            winner, reason = await judge_clash(player1, player2, player1_creation, player2_creation)
+            
+            # Announce result
+            result_embed = discord.Embed(
+                title="The Victor 🏆",
+                description=f"{winner.display_name} with {player1_creation if winner == player1 else player2_creation}",
+                color=discord.Color.gold()
+            )
+            result_embed.add_field(name="Reason", value=reason, inline=False)
+            # You can add a victory image here if you have one
+            
+            await ctx.send(embed=result_embed)
+            
+            # Add rematch button (implementing as a simple message for now)
+            # await ctx.send("🔄 Rematch [2/2]")
+        
+        except Exception as e:
+            await ctx.send(f"An error occurred during the clash: {str(e)}")
 
     @memorygame.error
     async def memorygame_error(self, ctx, error):
