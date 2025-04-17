@@ -235,9 +235,10 @@ class Games(commands.Cog):
             """Use Gemini API to judge clash submissions"""
             try:
                 import google.generativeai as genai
+                import os
 
-                # Configure the Gemini API with your key
-                genai.configure(api_key="AIzaSyCuSGmi8OsJ0ulhCLleCIeaDvc1I3omzus")
+                # Configure the Gemini API with your key from environment variable
+                genai.configure(api_key=os.environ['gemini_api_key'])
 
                 # Set up the model
                 generation_config = {
