@@ -230,26 +230,82 @@ class Games(commands.Cog):
                     await asyncio.sleep(2)  # Give a moment for users to see the final submission state
                     self.view.stop()
         
-        # Placeholder function for AI judging (to be implemented later)
+        # AI judging function using Google's Gemini API
         async def judge_clash(player1, player1_creation, player2, player2_creation):
-            """Placeholder for AI judgment of clash submissions"""
-            # This would eventually use an AI model to determine the winner
-            # For now, using a simple random choice with creative reason
-            winner = random.choice([player1, player2])
-            loser = player2 if winner == player1 else player1
-            winner_creation = player1_creation if winner == player1 else player2_creation
-            loser_creation = player2_creation if winner == player1 else player1_creation
-            
-            # Generate a more creative reason based on the creations
-            reasons = [
-                f"{winner_creation} absorbs the secret, making it deliciously illegible. Plus, who can resist warm, buttery carbs?",
-                f"{winner_creation} overwhelms {loser_creation} with its superior capabilities and strategic advantage.",
-                f"The sheer power of {winner_creation} is too much for {loser_creation} to handle in direct combat.",
-                f"{winner_creation} uses an unexpected technique that {loser_creation} simply cannot counter."
-            ]
-            
-            reason = random.choice(reasons)
-            return winner, reason
+            """Use Gemini API to judge clash submissions"""
+            try:
+                import google.generativeai as genai
+
+                # Configure the Gemini API with your key
+                genai.configure(api_key="AIzaSyCuSGmi8OsJ0ulhCLleCIeaDvc1I3omzus")
+
+                # Set up the model
+                generation_config = {
+                    "temperature": 0.9,
+                    "top_p": 1,
+                    "top_k": 32,
+                    "max_output_tokens": 250,
+                }
+                
+                # Create the prompt for the battle
+                prompt = f"""
+                In an epic battle between two creations:
+                - Player 1 ({player1.display_name}) is using: {player1_creation}
+                - Player 2 ({player2.display_name}) is using: {player2_creation}
+                
+                Decide who would win this battle and why in a creative, entertaining way. Don't make it too long, max 3 lines. no line 
+                breaks.
+                Respond in this exact format:
+                WINNER: [Player 1 or Player 2]
+                REASON: [A creative, detailed explanation of why this creation won]
+                """
+                
+                # Generate response from Gemini
+                model = genai.GenerativeModel(
+                    model_name="gemini-2.0-flash",
+                    generation_config=generation_config
+                )
+                response = model.generate_content(prompt)
+                
+                # Parse the response to extract winner and reason
+                response_text = response.text
+                if "WINNER: Player 1" in response_text:
+                    winner = player1
+                    winner_creation = player1_creation
+                else:
+                    winner = player2
+                    winner_creation = player2_creation
+                
+                # Extract the reason
+                reason_match = re.search(r"REASON: (.*?)(?=$|\n\n)", response_text, re.DOTALL)
+                # print(f"DEBUG: Full response from Gemini: {response_text}")
+                if reason_match:
+                    reason = reason_match.group(1).strip()
+                else:
+                    # Fallback in case the API doesn't format as expected
+                    reason = response_text.split("REASON:")[-1].strip() if "REASON:" in response_text else response_text
+                
+                return winner, reason
+                
+            except Exception as e:
+                print(f"Error using Gemini API: {str(e)}")
+                
+                # Fallback to random choice if the API fails
+                winner = random.choice([player1, player2])
+                loser = player2 if winner == player1 else player1
+                winner_creation = player1_creation if winner == player1 else player2_creation
+                loser_creation = player2_creation if winner == player1 else player1_creation
+                
+                # Generate a fallback creative reason
+                reasons = [
+                    f"{winner_creation} absorbs the secret, making it deliciously illegible. Plus, who can resist warm, buttery carbs?",
+                    f"{winner_creation} overwhelms {loser_creation} with its superior capabilities and strategic advantage.",
+                    f"The sheer power of {winner_creation} is too much for {loser_creation} to handle in direct combat.",
+                    f"{winner_creation} uses an unexpected technique that {loser_creation} simply cannot counter."
+                ]
+                
+                reason = f"[API Fallback] {random.choice(reasons)}"
+                return winner, reason
         
         # Execute clash
         try:
@@ -300,7 +356,7 @@ class Games(commands.Cog):
             await asyncio.sleep(2)
             
             # Judge the clash
-            winner, reason = await judge_clash(player1, player2, player1_creation, player2_creation)
+            winner, reason = await judge_clash(player1, player1_creation, player2, player2_creation)
             
             # Announce result
             result_embed = discord.Embed(
