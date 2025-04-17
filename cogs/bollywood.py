@@ -234,19 +234,12 @@ class Games(commands.Cog):
         async def judge_clash(player1, player1_creation, player2, player2_creation):
             """Use Gemini API to judge clash submissions"""
             try:
-                import google.generativeai as genai
+                import requests
                 import os
+                import json
 
-                # Configure the Gemini API with your key from environment variable
-                genai.configure(api_key=os.environ['gemini_api_key'])
-
-                # Set up the model
-                generation_config = {
-                    "temperature": 0.9,
-                    "top_p": 1,
-                    "top_k": 32,
-                    "max_output_tokens": 250,
-                }
+                # Get API key from environment variable
+                api_key = os.environ['gemini_api_key']
                 
                 # Create the prompt for the battle
                 prompt = f"""
@@ -261,15 +254,39 @@ class Games(commands.Cog):
                 REASON: [A creative, detailed explanation of why this creation won]
                 """
                 
-                # Generate response from Gemini
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.0-flash",
-                    generation_config=generation_config
-                )
-                response = model.generate_content(prompt)
+                # API endpoint for Gemini
+                url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
                 
-                # Parse the response to extract winner and reason
-                response_text = response.text
+                # Request payload
+                payload = {
+                    "contents": [{
+                        "parts": [{
+                            "text": prompt
+                        }]
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.9,
+                        "topP": 1,
+                        "topK": 32,
+                        "maxOutputTokens": 250
+                    }
+                }
+                
+                # Send request to Gemini API
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                response = requests.post(
+                    f"{url}?key={api_key}",
+                    headers=headers,
+                    data=json.dumps(payload)
+                )
+                
+                # Parse the JSON response
+                response_data = response.json()
+                
+                # Extract the text from the response
+                response_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
                 if "WINNER: Player 1" in response_text:
                     winner = player1
                     winner_creation = player1_creation
