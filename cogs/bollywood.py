@@ -247,7 +247,7 @@ class Games(commands.Cog):
                 - Player 1 ({player1.display_name}) is using: {player1_creation}
                 - Player 2 ({player2.display_name}) is using: {player2_creation}
                 
-                Decide who would win this battle and why in a creative, entertaining way. Don't make it too long, max 3 lines. no line 
+                Decide who would win this battle and why in a creative, entertaining way. It shouldn't prioritize superficial things. Make it quirky, fun, unexpectable. Don't go with emotions, go with absurdity. Don't make it too long, max 3 lines. no line 
                 breaks.
                 Respond in this exact format:
                 WINNER: [Player 1 or Player 2]
