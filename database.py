@@ -1,7 +1,6 @@
 import asyncpg
 import datetime
 import json
-import ipdb
 
 
 class Database():
@@ -91,8 +90,8 @@ class Analytics(Database):
         super().__init__(pool)
 
     async def insert_command(self, command, server_id, user_id):
-        sql = f"""INSERT INTO {self.tableName} (command, server_id, user_id, time_of_command) VALUES ('{command}', {server_id}, {user_id}, '{datetime.datetime.now()}');""".format(self.tableName)
-        await self.execute(sql)
+        sql = f"INSERT INTO {self.tableName} (command, server_id, user_id, time_of_command) VALUES ($1, $2, $3, $4);"
+        await self.execute(sql, command, server_id, user_id, datetime.datetime.now())
 
 
 class BollywoodHangmanDB(Database):
@@ -136,7 +135,7 @@ class PlotsterDB(Database):
 
     async def insert_new_entry(self, user_id, points, rounds):
         sql = f"INSERT INTO {self.tableName} (user_id, points, rounds) VALUES ($1, $2, $3);"
-        await self.cursor.execute(sql, (user_id, points, rounds))
+        await self.execute(sql, user_id, points, rounds)
 
     async def update_score(self, user_id, points, rounds):
         sql = """UPDATE {}
@@ -174,7 +173,7 @@ class Coins(Database):
         sql2 = f"INSERT INTO {self.tableName} (user_id, coins) VALUES ($2, $1);"
 
         if coins==0 and command_name!="":
-            coins = self.commands_dict[command_name]['coins']
+            coins = self.commands_dict.get(command_name, {}).get('coins', 0)
 
         await self.update_or_insert(sql, sql2, coins, user_id)
 
@@ -189,7 +188,9 @@ class Coins(Database):
     async def get_amount_coins(self, user_id):
         sql = f"""SELECT * FROM {self.tableName} WHERE user_id=$1;"""
         res = await self.view(sql, user_id)
-        return res[0]
+        if len(res) != 0:
+            return res[0]
+        return {'user_id': user_id, 'coins': 0}
 
 class Characters(Database):
     """
@@ -208,9 +209,9 @@ class Characters(Database):
         super().__init__(pool)
 
     async def insert_character(self, user_id, show_name=None, cartoon_character=None, dog_breed=None, cat_breed=None):
-        """Insert a character entry into the table"""
+        """Insert or update a character entry in the table, preserving non-null existing fields"""
         sql = f"INSERT INTO {self.tableName} (user_id, show_name, cartoon_character, dog_breed, cat_breed) VALUES ($1, $2, $3, $4, $5);"
-        sql2 = f"UPDATE {self.tableName} SET show_name=$2, cartoon_character=$3, dog_breed=$4, cat_breed=$5 WHERE user_id = $1;"
+        sql2 = f"UPDATE {self.tableName} SET show_name = COALESCE($2, show_name), cartoon_character = COALESCE($3, cartoon_character), dog_breed = COALESCE($4, dog_breed), cat_breed = COALESCE($5, cat_breed) WHERE user_id = $1;"
 
         await self.update_or_insert(sql2, sql, user_id, show_name, cartoon_character, dog_breed, cat_breed)
 
@@ -218,18 +219,16 @@ class Characters(Database):
         """Update the details of a character entry in the table"""
         update_fields = []
         query_args = []
-        if show_name is not None:
-            update_fields.append("show_name = $1")
-            query_args.append(show_name)
-        if cartoon_character is not None:
-            update_fields.append("cartoon_character = $2")
-            query_args.append(cartoon_character)
-        if dog_breed is not None:
-            update_fields.append("dog_breed = $3")
-            query_args.append(dog_breed)
-        if cat_breed is not None:
-            update_fields.append("cat_breed = $4")
-            query_args.append(cat_breed)
+        fields = [
+            ("show_name", show_name),
+            ("cartoon_character", cartoon_character),
+            ("dog_breed", dog_breed),
+            ("cat_breed", cat_breed)
+        ]
+        for col, val in fields:
+            if val is not None:
+                query_args.append(val)
+                update_fields.append(f"{col} = ${len(query_args)}")
 
         if len(update_fields) == 0:
             return  # No fields to update
@@ -237,7 +236,7 @@ class Characters(Database):
         update_fields_str = ", ".join(update_fields)
         query_args.append(user_id)
 
-        sql = f"UPDATE {self.tableName} SET {update_fields_str} WHERE user_id = $5;"
+        sql = f"UPDATE {self.tableName} SET {update_fields_str} WHERE user_id = ${len(query_args)};"
         await self.execute(sql, *query_args)
 
     async def get_character(self, user_id):

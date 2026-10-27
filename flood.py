@@ -2,7 +2,6 @@ from PIL import Image, ImageDraw
 from io import BytesIO
 from discord import File
 import random
-import ipdb
 
 class Flood():
 
@@ -137,37 +136,29 @@ class Flood():
     def flood_fill(self, start_x, start_y, target_color):
         # Dimensions of the grid
         grid = self.box_colors
-
         rows = len(grid)
         cols = len(grid[0])
 
-        # Create a matrix to track visited positions
         visited = [[False for _ in range(cols)] for _ in range(rows)]
-
-        # Helper function for recursive flood fill
-        def fill(x, y):
-            # Check if the current position is within bounds and has the target color
-            if x < 0 or x >= cols or y < 0 or y >= rows or visited[y][x] or grid[y][x] != target_color:
-                return
-
-            # Mark the position as visited
-            visited[y][x] = True
-
-            # Recursively fill adjacent positions
-            fill(x - 1, y)  # Left
-            fill(x + 1, y)  # Right
-            fill(x, y - 1)  # Up
-            fill(x, y + 1)  # Down
-
-        # Perform flood fill from the starting position
-        fill(start_x, start_y)
-
-        # Collect the adjacent positions of the same color
         adjacent_squares = []
-        for y in range(rows):
-            for x in range(cols):
-                if visited[y][x]:
-                    adjacent_squares.append((y, x))
+
+        if start_y < 0 or start_y >= rows or start_x < 0 or start_x >= cols:
+            return adjacent_squares
+        if grid[start_y][start_x] != target_color:
+            return adjacent_squares
+
+        stack = [(start_x, start_y)]
+        visited[start_y][start_x] = True
+
+        while stack:
+            cx, cy = stack.pop()
+            adjacent_squares.append((cy, cx))
+            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < cols and 0 <= ny < rows and not visited[ny][nx]:
+                    if grid[ny][nx] == target_color:
+                        visited[ny][nx] = True
+                        stack.append((nx, ny))
 
         return adjacent_squares
 
@@ -189,11 +180,8 @@ class Flood():
         It will **not** include, the color of the original pixels of the user,
         and **not** the color of the pixels of the opponent.
         """
-        colors = self.colors.copy()
-        for i in self.players.values():
-            colors.remove(i['color'])
-
-        return colors
+        player_colors = {i['color'] for i in self.players.values()}
+        return [c for c in self.colors if c not in player_colors]
 
     def get_percentages(self):
         """Return percentages"""

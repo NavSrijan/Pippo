@@ -1,24 +1,19 @@
 from typing import Literal
-from enum import Enum
 import datetime
-from zoneinfo import ZoneInfo
 import time
 import random
 import re
 import requests
 import json
 import asyncio
-
-from discord.ext import commands, tasks
-import discord
-
-import ipdb
-import hashlib
-import requests
-from PIL import Image, ImageDraw, ImageOps
-from io import BytesIO
-from views import BreedGuessView, ShipView
 import csv
+import hashlib
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageOps
+
+from discord.ext import commands
+import discord
+from views import ShipView
 
 def load_csv(filename):
     data = []
@@ -35,19 +30,25 @@ class Fun(commands.Cog):
         self.bot = bot
         self.bot.cartoon_characters = load_csv("data/cartoons/character_dataset.csv")
 
-    async def avatar_concatenation(ctx,
-                                   user1: discord.User,
-                                   user2: discord.User,
-                                   heart=True) -> None:
+    async def avatar_concatenation(self,
+                                   user1,
+                                   user2,
+                                   heart=True) -> discord.File:
         # Get the avatar images of both users
-        avatar1 = user1.avatar.url
-        avatar2 = user2.avatar.url
+        try:
+            bytes1 = await user1.display_avatar.read()
+            image1 = Image.open(BytesIO(bytes1)).convert('RGBA')
+        except Exception:
+            resp1 = requests.get(user1.display_avatar.url, stream=True, timeout=10)
+            image1 = Image.open(resp1.raw).convert('RGBA')
 
-        # Open the avatar images using Pillow
-        image1 = Image.open(requests.get(avatar1,
-                                         stream=True).raw).convert('RGBA')
-        image2 = Image.open(requests.get(avatar2,
-                                         stream=True).raw).convert('RGBA')
+        try:
+            bytes2 = await user2.display_avatar.read()
+            image2 = Image.open(BytesIO(bytes2)).convert('RGBA')
+        except Exception:
+            resp2 = requests.get(user2.display_avatar.url, stream=True, timeout=10)
+            image2 = Image.open(resp2.raw).convert('RGBA')
+
         if heart:
             heart_path = "imgs/heart.webp"
         else:
@@ -55,8 +56,7 @@ class Fun(commands.Cog):
         heart = Image.open(heart_path).convert('RGBA')
 
         # Resize images to a common size
-        size = (min(image1.size[0],
-                    image2.size[0]), min(image1.size[1], image2.size[1]))
+        size = (min(image1.size[0], image2.size[0]), min(image1.size[1], image2.size[1]))
         image1 = image1.resize(size)
         image2 = image2.resize(size)
 
@@ -82,10 +82,8 @@ class Fun(commands.Cog):
         combined.paste(image2, (size[0], 0))
         combined.paste(heart, heart_position, mask=heart)
 
-        result = combined
-        result = result.convert('RGB')
+        result = combined.convert('RGB')
 
-        # Convert the resulting image to bytes and send it to the destination object
         with BytesIO() as output:
             result.save(output, format='JPEG', quality=20, optimize=True)
             output.seek(0)
@@ -99,14 +97,18 @@ class Fun(commands.Cog):
                    user2 = None):
         """Ship command to ship people"""
         user_regex = r'<@!?(\d+)>'
-        if user1 is not None:
+        if user1 is not None and isinstance(user1, str):
             m1 = re.match(user_regex, user1)
-            if m1 is not None:
-                user1 = ctx.guild.get_member(int(user1[2:-1]))
-        if user2 is not None:
-            m1 = re.match(user_regex, user2)
-            if m1 is not None:
-                user2 = ctx.guid.get_member(int(user2[2:-1]))
+            if m1 is not None and ctx.guild:
+                fetched = ctx.guild.get_member(int(m1.group(1)))
+                if fetched:
+                    user1 = fetched
+        if user2 is not None and isinstance(user2, str):
+            m2 = re.match(user_regex, user2)
+            if m2 is not None and ctx.guild:
+                fetched = ctx.guild.get_member(int(m2.group(1)))
+                if fetched:
+                    user2 = fetched
 
         if user1 is None:
             user1 = ctx.author
@@ -114,8 +116,11 @@ class Fun(commands.Cog):
             user2 = user1
             user1 = ctx.author
         if user2 is None:
-            guild = ctx.guild
-            user2 = random.choice(guild.members)
+            if ctx.guild and len(ctx.guild.members) > 1:
+                members_pool = [m for m in ctx.guild.members if m.id != user1.id]
+                user2 = random.choice(members_pool) if members_pool else ctx.author
+            else:
+                user2 = "Pippo"
 
         def hash_comp(a="Ram", b="Shyam"):
             h1 = int(hashlib.md5(a.encode()).hexdigest(), 16)
@@ -126,26 +131,12 @@ class Fun(commands.Cog):
 
             return percentage
 
-        if not isinstance(user1, str):
-            if user1.nick is None:
-                u1 = user1.name
-            else:
-                u1 = user1.nick
-        else:
-            u1 = user1
-        if not isinstance(user2, str):
-            if user2.nick is None:
-                u2 = user2.name
-            else:
-                u2 = user2.nick
-        else:
-            u2 = user2
+        u1 = getattr(user1, 'display_name', str(user1))
+        u2 = getattr(user2, 'display_name', str(user2))
+
         score = hash_comp(u1, u2)
-        
-        if score >= 50:
-            heart = True
-        else:
-            heart = False
+        heart = score >= 50
+
         words = [
             'Apathetic 😐', 'Apathetic 😐', '🤷 Disinterested', '🙄 Polite',
             '😊 Caring', '❤️ Affectionate', '💕 Devoted', '🙌 Adoring',
@@ -162,23 +153,24 @@ class Fun(commands.Cog):
         ]
 
         empty = "⬜️"
-        combined_name = ":butterfly: " + u1[:len(u1) // 2] + u2[len(u2) // 2:]
-        names = f":maple_leaf:`{u1}`\n:maple_leaf:`{u2}`" + "\n"
-        desc = str(
-            int(score)) + "% " + int(round(score, -1) / 10) * filled[int(
-                round(score, -1) / 10)] + int(round(
-                    (100 - score),
-                    -1) / 10) * empty + f" {words[int(round(score, -1)/10)]}"
-        if not isinstance(user1, str) and not isinstance(user2, str):
-            file = await self.avatar_concatenation(user1, user2, heart=heart)
-            emb = discord.Embed(title=combined_name, description=desc)
-            emb.set_image(url='attachment://avatar.jpg')
-            view = ShipView(self.bot, ctx)
-            msg = await ctx.send(names, embed=emb, file=file, view=view)
-            view.out = msg
+        combined_name = ":butterfly: " + u1[:max(1, len(u1) // 2)] + u2[len(u2) // 2:]
+        names = f":maple_leaf:`{u1}`\n:maple_leaf:`{u2}`\n"
+        idx = min(10, max(0, int(round(score, -1) / 10)))
+        desc = f"{int(score)}% " + idx * filled[idx] + (10 - idx) * empty + f" {words[idx]}"
 
+        if not isinstance(user1, str) and not isinstance(user2, str):
+            try:
+                file = await self.avatar_concatenation(user1, user2, heart=heart)
+                emb = discord.Embed(title=combined_name, description=desc, color=discord.Color.magenta())
+                emb.set_image(url='attachment://avatar.jpg')
+                view = ShipView(self.bot, ctx)
+                msg = await ctx.send(names, embed=emb, file=file, view=view)
+                view.out = msg
+            except Exception:
+                emb = discord.Embed(title=combined_name, description=desc, color=discord.Color.magenta())
+                await ctx.send(names, embed=emb)
         else:
-            emb = discord.Embed(title=combined_name, description=desc)
+            emb = discord.Embed(title=combined_name, description=desc, color=discord.Color.magenta())
             await ctx.send(names, embed=emb)
 
     @commands.hybrid_command(name="laser")
@@ -198,30 +190,33 @@ class Fun(commands.Cog):
             await asyncio.sleep(1.5)
             text = f"{user.mention}" + ' ' * ((6 - i - 1) * 6) + las * i + mol
             await msg.edit(content=text)
-        text = f"{explode}" + ' ' * ((6 - i - 1) * 6) + las * i + mol
+        text = f"{explode}" + ' ' * ((6 - 5 - 1) * 6) + las * 5 + mol
         await msg.edit(content=text)
         await asyncio.sleep(1.5)
-        text = f"{explode}" + ' ' * (30) + mo +f"\n{ctx.author.mention} annihilated {user.mention}"
+        text = f"{explode}" + ' ' * (30) + mo + f"\n{ctx.author.mention} annihilated {user.mention}"
         await msg.edit(content=text)
 
     @commands.cooldown(1, 3, commands.BucketType.user)
     @commands.hybrid_command(name="cartoon")
     async def cartoon(self, ctx):
         """Gets a random cartoon image"""
+        if not hasattr(self.bot, 'cartoon_characters') or not self.bot.cartoon_characters:
+            self.bot.cartoon_characters = load_csv("data/cartoons/character_dataset.csv")
 
         car = random.choice(self.bot.cartoon_characters)
-
-        emb = discord.Embed(title=f"**{car['character_name']}** from **{car['show_name']}**")
+        emb = discord.Embed(title=f"**{car['character_name']}** from **{car['show_name']}**", color=discord.Color.dark_purple())
         emb.set_image(url=car['image_link'])
         await ctx.reply(embed=emb)
 
     @commands.hybrid_command(name="cartoonme")
     async def cartoonme(self, ctx, user: discord.Member=None):
         """Which cartoon character are you?"""
+        if not hasattr(self.bot, 'cartoon_characters') or not self.bot.cartoon_characters:
+            self.bot.cartoon_characters = load_csv("data/cartoons/character_dataset.csv")
 
         def generate_random_number(user_id, n):
-            random.seed(user_id)  # Set the seed based on the user ID
-            return random.randint(0, n)  # Generate a random number between 0 and n
+            random.seed(user_id)
+            return random.randint(0, n)
 
         def fetch_value(characters, character_name):
             for character in characters:
@@ -236,67 +231,80 @@ class Fun(commands.Cog):
         character_name = await self.bot.db.characters.get_character(user.id)
         if character_name is None:
             number = generate_random_number(idd, len(self.bot.cartoon_characters)-1)
-
             character = self.bot.cartoon_characters[number]
         else:
             character = fetch_value(self.bot.cartoon_characters, character_name['cartoon_character'])
+            if not character:
+                number = generate_random_number(idd, len(self.bot.cartoon_characters)-1)
+                character = self.bot.cartoon_characters[number]
 
-        emb = discord.Embed(title=f"{user.name} is **{character['character_name']}** from {character['show_name']}")
+        emb = discord.Embed(title=f"{user.display_name} is **{character['character_name']}** from {character['show_name']}", color=discord.Color.gold())
         emb.set_image(url=character['image_link'])
         await ctx.reply(embed=emb)
 
     @commands.hybrid_command(name="8ball")
-    async def _8ball(self, ctx, question):
+    async def _8ball(self, ctx, question: str):
         """Want to know your fate?"""
-        await ctx.reply(random.choice(["Yes", "No", "Maybe"]))
+        responses = [
+            "It is certain.", "It is decidedly so.", "Without a doubt.",
+            "Yes definitely.", "You may rely on it.", "As I see it, yes.",
+            "Most likely.", "Outlook good.", "Yes.", "Signs point to yes.",
+            "Reply hazy, try again.", "Ask again later.", "Better not tell you now.",
+            "Cannot predict now.", "Concentrate and ask again.",
+            "Don't count on it.", "My reply is no.", "My sources say no.",
+            "Outlook not so good.", "Very doubtful."
+        ]
+        await ctx.reply(f"🎱 **{random.choice(responses)}**")
 
     @commands.hybrid_command(name="onewordstory") 
     async def onewordstory(self, ctx):
         """Make stories with your friends by writing one word each."""
-
-        # Send an embed with the instructions
         def instruction_embed():
-            emb = discord.Embed(title="One Word Story", description="""This'll contain the description.""")
+            emb = discord.Embed(title="One Word Story", description="Send one word at a time in this channel to build a story!\nType `{prefix}end` when you are done.", color=discord.Color.blue())
             return emb
 
         def check(message):
-            return message.channel == ctx.channel and len(message.content.split(" "))==1 
+            return message.channel == ctx.channel and not message.author.bot and len(message.content.strip().split()) == 1
 
         await ctx.reply(embed=instruction_embed())
 
         timeout = 60
         para = ""
+        prefix = getattr(self.bot, 'prefix', '.')
 
-        # Loop to check for one word with a 60 sec timeout.
         while True:
             try:
-                msg = await self.bot.wait_for('message',
-                                              check=check,
-                                              timeout=timeout)
-                prefix = await self.bot.get_prefixx(self.bot, ctx.message)
-                if msg.content==f"{prefix}end":
+                msg = await self.bot.wait_for('message', check=check, timeout=timeout)
+                if msg.content.strip().lower() == f"{prefix}end":
                     break
-                para+=f" {msg.content}"
-                await msg.add_reaction("\U0001F39F")
+                para += f" {msg.content.strip()}"
+                try:
+                    await msg.add_reaction("\U0001F39F")
+                except Exception:
+                    pass
             except asyncio.exceptions.TimeoutError:
-                await ctx.send("Looks like you didn't wanna play...")
+                await ctx.send("Story timeout! Looks like the session has ended.")
                 break
 
-        # The final paragraph
-        await ctx.channel.send(embed=discord.Embed(title="The final paragraph", description=para))
+        final_text = para.strip() if para.strip() else "No story was written!"
+        await ctx.channel.send(embed=discord.Embed(title="The final paragraph", description=final_text, color=discord.Color.green()))
 
     @commands.hybrid_command(name="flames")
     async def flames(self, ctx, user1=None, user2=None):
         """Remember the Flames from your school days?"""
         user_regex = r'<@!?(\d+)>'
-        if user1 is not None:
+        if user1 is not None and isinstance(user1, str):
             m1 = re.match(user_regex, user1)
-            if m1 is not None:
-                user1 = ctx.guild.get_member(int(user1[2:-1]))
-        if user2 is not None:
-            m1 = re.match(user_regex, user2)
-            if m1 is not None:
-                user2 = ctx.guid.get_member(int(user2[2:-1]))
+            if m1 is not None and ctx.guild:
+                fetched = ctx.guild.get_member(int(m1.group(1)))
+                if fetched:
+                    user1 = fetched
+        if user2 is not None and isinstance(user2, str):
+            m2 = re.match(user_regex, user2)
+            if m2 is not None and ctx.guild:
+                fetched = ctx.guild.get_member(int(m2.group(1)))
+                if fetched:
+                    user2 = fetched
 
         if user1 is None:
             user1 = ctx.author
@@ -304,8 +312,11 @@ class Fun(commands.Cog):
             user2 = user1
             user1 = ctx.author
         if user2 is None:
-            guild = ctx.guild
-            user2 = random.choice(guild.members)
+            if ctx.guild and len(ctx.guild.members) > 1:
+                members_pool = [m for m in ctx.guild.members if m.id != user1.id]
+                user2 = random.choice(members_pool) if members_pool else ctx.author
+            else:
+                user2 = "Pippo"
 
         def calculate_flames(name1, name2):
             flames = "FLAMES"
@@ -321,53 +332,63 @@ class Fun(commands.Cog):
                 result.append(char)
 
             count = len(result) + len(name2)
+            if count <= 0:
+                count = 1
+
             while len(flames) > 1:
                 index = (count - 1) % len(flames)
                 flames = flames[:index] + flames[index+1:]
 
-            #options = {"F":"Friends", "L":"Lovers", "A":"Affectionate", "M":"Marriage", "E":"Enemies", "S":"Siblings"}
             options = {"F": "👫 Friends", "L": "❤️ Lovers", "A": "😊 Affectionate", "M": "💍 Marriage", "E": "😡 Enemies", "S": "👦👧 Siblings"}
-
             return options[flames], flames
 
         def get_img_url(letter):
-            options = {"F":"https://media.discordapp.net/attachments/1092244601525510154/1142797002778869910/F.png?width=400&height=300",
-                       "L":"https://media.discordapp.net/attachments/1092244601525510154/1142797004469174292/L.png?width=400&height=300",
-                       "A":"https://media.discordapp.net/attachments/1092244601525510154/1142797003345121350/A.png?width=400&height=300",
-                       "M":"https://media.discordapp.net/attachments/1092244601525510154/1142797003630313502/M.png?width=400&height=300",
-                       "E":"https://media.discordapp.net/attachments/1092244601525510154/1142797003928129626/E.png?width=400&height=300",
-                       "S":"https://media.discordapp.net/attachments/1092244601525510154/1142797004154609774/S.png?width=400&height=300"}
-            return options[letter]
+            options = {
+                "F": "https://media.discordapp.net/attachments/1092244601525510154/1142797002778869910/F.png?width=400&height=300",
+                "L": "https://media.discordapp.net/attachments/1092244601525510154/1142797004469174292/L.png?width=400&height=300",
+                "A": "https://media.discordapp.net/attachments/1092244601525510154/1142797003345121350/A.png?width=400&height=300",
+                "M": "https://media.discordapp.net/attachments/1092244601525510154/1142797003630313502/M.png?width=400&height=300",
+                "E": "https://media.discordapp.net/attachments/1092244601525510154/1142797003928129626/E.png?width=400&height=300",
+                "S": "https://media.discordapp.net/attachments/1092244601525510154/1142797004154609774/S.png?width=400&height=300"
+            }
+            return options.get(letter, "")
 
-        def return_embed(name1, name2):
-            relation, letter = calculate_flames(name1, name2)
-            emb = discord.Embed(title="Flames", description=f"**{relation}**")
-            emb.set_image(url=get_img_url(letter))
-            return emb
-
-        name1 = user1.name
-        name2 = user2.name
+        name1 = getattr(user1, 'display_name', str(user1))
+        name2 = getattr(user2, 'display_name', str(user2))
         relation, letter = calculate_flames(name1, name2)
-        names = f":maple_leaf:`{name1}`\n:maple_leaf:`{name2}`" + "\n"
-        await ctx.reply(names,embed=return_embed(user1.name, user2.name))
+        names = f":maple_leaf:`{name1}`\n:maple_leaf:`{name2}`\n"
+        emb = discord.Embed(title="Flames", description=f"**{relation}**", color=discord.Color.red())
+        img = get_img_url(letter)
+        if img:
+            emb.set_image(url=img)
+        await ctx.reply(names, embed=emb)
 
     @commands.hybrid_command(name="what", aliases=["define", "ub", "urban_dictionary", "urban"])
-    async def meaning(self, ctx, query):
+    async def meaning(self, ctx, query: str):
         """
-        Querys Urban dictionary to get the meaning of the word.
-        syntax: $what {word}
+        Query Urban dictionary to get the meaning of the word.
+        syntax: .what {word}
         """
-        def getMeaning(word):
-            response = requests.get(
-                f"http://api.urbandictionary.com/v0/define?term={word}")
-            res = response.json()['list']
-            return res
-        word = query
-        res = getMeaning(word)
-        toSend = "Data from Urban Dictionary"
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
+                async with session.get(f"http://api.urbandictionary.com/v0/define?term={query}") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        res = data.get('list', [])
+                    else:
+                        res = []
+        except Exception as e:
+            await ctx.reply("Could not reach Urban Dictionary right now.")
+            return
+
+        if not res:
+            await ctx.reply(f"No definitions found for **{query}** on Urban Dictionary.")
+            return
+
+        toSend = f"**Urban Dictionary: {query}**\n"
         j = 1
         for i in res:
-            defn = i['definition']
+            defn = i.get('definition', '').replace("[", "").replace("]", "")
             if len(defn) <= 600:
                 toSend += f"```{j}. {defn}```\n"
                 j += 1

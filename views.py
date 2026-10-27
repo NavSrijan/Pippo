@@ -1,5 +1,4 @@
 import discord
-import ipdb
 import random
 import asyncio
 from typing import List
@@ -531,6 +530,9 @@ class MemoryButton(discord.ui.Button):
         if interaction.user.id != self.view.players[self.view.turn].id:
             await interaction.followup.send("Not really your turn, is it?", ephemeral=True)
             return
+        if self in self.view.temp_clicked or self.revealed:
+            await interaction.followup.send("You cannot select the same card twice!", ephemeral=True)
+            return
         self.view.temp_clicked.append(self)
         if len(self.view.temp_clicked) == 1:
             self.label = self.view.emojis[self.view.children.index(self)]
@@ -730,13 +732,17 @@ class FloodView(discord.ui.View):
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
 
-        if interaction.user!= self.players[0]:
-            self.players.append(interaction.user)
-            self.flood = Flood(self.players)
-            self.clear_items()
-            self.populate_buttons()
-
-            await self.update_msg(embed=self.return_embed(), file=self.flood.return_image())
+        if len(self.players) == 1:
+            if interaction.user != self.players[0]:
+                self.players.append(interaction.user)
+                self.flood = Flood(self.players)
+                self.clear_items()
+                self.populate_buttons()
+                await self.update_msg(embed=self.return_embed(), file=self.flood.return_image())
+            else:
+                await interaction.followup.send("You cannot accept your own challenge!", ephemeral=True)
+        else:
+            await interaction.followup.send("This match already has two players!", ephemeral=True)
 
 
 # GuessTheMovie

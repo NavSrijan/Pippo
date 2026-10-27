@@ -5,9 +5,10 @@ import re
 from typing import Union
 import datetime
 from enum import Enum
+import os
+import aiohttp
 
 import discord
-import ipdb
 from discord.ext import commands
 from fuzzywuzzy import fuzz
 from io import BytesIO
@@ -128,9 +129,15 @@ class Games(commands.Cog):
         await asyncio.sleep(time_to_enter)
         await time_temp_msg.delete()
         msg = await msg.fetch()
-        rec = msg.reactions[0]
-        people = [user.id async for user in rec.users()]
-        people.remove(self.bot.user.id)
+        people = []
+        if msg.reactions:
+            rec = msg.reactions[0]
+            people = [user.id async for user in rec.users()]
+        if self.bot.user and self.bot.user.id in people:
+            people.remove(self.bot.user.id)
+        if not people:
+            await ctx.send("No players joined the game in time! Bingo canceled.")
+            return
         players = {}
         for i in people:
             players[i] = Player(i)
@@ -232,14 +239,12 @@ class Games(commands.Cog):
         
         # AI judging function using Google's Gemini API
         async def judge_clash(player1, player1_creation, player2, player2_creation):
-            """Use Gemini API to judge clash submissions"""
+            """Use Gemini API to judge clash submissions asynchronously"""
             try:
-                import requests
-                import os
-                import json
-
                 # Get API key from environment variable
-                api_key = os.environ['gemini_api_key']
+                api_key = os.environ.get('gemini_api_key', '')
+                if not api_key:
+                    raise ValueError("gemini_api_key environment variable not set")
                 
                 # Create the prompt for the battle
                 prompt = f"""
@@ -272,35 +277,37 @@ class Games(commands.Cog):
                     }
                 }
                 
-                # Send request to Gemini API
                 headers = {
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": api_key
                 }
-                response = requests.post(
-                    f"{url}?key={api_key}",
-                    headers=headers,
-                    data=json.dumps(payload)
-                )
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                    async with session.post(url, headers=headers, json=payload) as response:
+                        if response.status != 200:
+                            raise RuntimeError(f"Gemini API returned status {response.status}")
+                        response_data = await response.json()
                 
-                # Parse the JSON response
-                response_data = response.json()
+                # Extract text safely
+                candidates = response_data.get("candidates", [])
+                if not candidates:
+                    raise RuntimeError("No candidates returned from Gemini API")
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if not parts:
+                    raise RuntimeError("No text parts in Gemini candidate")
                 
-                # Extract the text from the response
-                response_text = response_data["candidates"][0]["content"]["parts"][0]["text"]
+                response_text = parts[0].get("text", "")
                 if "WINNER: Player 1" in response_text:
                     winner = player1
-                    winner_creation = player1_creation
-                else:
+                elif "WINNER: Player 2" in response_text:
                     winner = player2
-                    winner_creation = player2_creation
+                else:
+                    winner = player1 if "player 1" in response_text.lower() else player2
                 
                 # Extract the reason
                 reason_match = re.search(r"REASON: (.*?)(?=$|\n\n)", response_text, re.DOTALL)
-                # print(f"DEBUG: Full response from Gemini: {response_text}")
                 if reason_match:
                     reason = reason_match.group(1).strip()
                 else:
-                    # Fallback in case the API doesn't format as expected
                     reason = response_text.split("REASON:")[-1].strip() if "REASON:" in response_text else response_text
                 
                 return winner, reason
@@ -356,8 +363,10 @@ class Games(commands.Cog):
             
             # Get the first two players who submitted
             player_ids = list(view.submissions.keys())[:2]
-            player1 = ctx.guild.get_member(player_ids[0])
-            player2 = ctx.guild.get_member(player_ids[1])
+            p1 = ctx.guild.get_member(player_ids[0]) if ctx.guild else None
+            p2 = ctx.guild.get_member(player_ids[1]) if ctx.guild else None
+            player1 = p1 or await self.bot.fetch_user(player_ids[0])
+            player2 = p2 or await self.bot.fetch_user(player_ids[1])
             player1_creation = view.submissions[player_ids[0]]
             player2_creation = view.submissions[player_ids[1]]
             
@@ -403,7 +412,7 @@ class Games(commands.Cog):
             raise error  # Re-raise the error so that it's still logged by the bot
 
 
-    async def on_command_error(self, ctx, error):
+    async def cog_command_error(self, ctx, error):
         if isinstance(error, commands.MaxConcurrencyReached):
             await ctx.send("An instance is already running.")
         elif isinstance(error, commands.CommandOnCooldown):

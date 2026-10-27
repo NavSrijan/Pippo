@@ -34,7 +34,9 @@ def utc_to_ist(utc_dt):
 
 
 def download_and_return_image(url, filename="emojiSuggestion.png") -> discord.File:
-    im = Image.open(requests.get(url, stream=True).raw).convert('RGBA')
+    response = requests.get(url, stream=True, timeout=10)
+    response.raise_for_status()
+    im = Image.open(response.raw).convert('RGBA')
     with BytesIO() as image_binary:
         im.save(image_binary, 'PNG')
         image_binary.seek(0)
@@ -147,6 +149,7 @@ def write_text_on_image(image_path, text, font_list, color_list, start_location=
 
     # Split text into words and underscores
     def custom_wrap(text, width):
+        width = max(1, width)
         words = text.split(' ')
         lines = []
         current_line = ""
@@ -168,15 +171,15 @@ def write_text_on_image(image_path, text, font_list, color_list, start_location=
 
     # Wrap text to fit image width
     max_lines = 3  # Adjust the number of lines as needed
-    wrapped_text = custom_wrap(text, image_width // font_size)
+    wrapped_text = custom_wrap(text, max(1, image_width // font_size))
     para = '\n'.join(wrapped_text)
 
     # Calculate the best font size to fit the specified number of lines
-    while True:
-        lines = custom_wrap(text, image_width // font_size)
+    while font_size > 12:
+        lines = custom_wrap(text, max(1, image_width // font_size))
         if len(lines) <= max_lines:
             break
-        font_size -= 1  # Decrease font size and try again
+        font_size -= 2  # Decrease font size and try again
         font = ImageFont.truetype(font_path, font_size)
 
     # Calculate line spacing and draw the text

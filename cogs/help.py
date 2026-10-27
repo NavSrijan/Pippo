@@ -5,7 +5,6 @@ import datetime
 from discord.ext import commands, tasks
 from views import HelpView
 import discord
-import ipdb
 
 from utils.bollywood_utils import game_start_embed, pixelate_game_start_embed, plotster_game_start_embed, create_instructions_embed
 
@@ -17,7 +16,7 @@ class Help(commands.Cog):
 
     async def main_help_message(self,
                                 ctx,
-                                cogs_to_show_help_for=['settings', 'games', 'fun', 'greetings', 'help', 'actions', 'animals']):
+                                cogs_to_show_help_for=['settings', 'games', 'fun', 'greetings', 'help', 'actions', 'animals', 'economy', 'shop']):
         """Main help"""
         desc = ""
         emb = discord.Embed(title="Help",
@@ -26,17 +25,30 @@ class Help(commands.Cog):
         for cog in self.bot.cogs:
             fill = ""
             if cog.lower() in cogs_to_show_help_for:
-                for cmd in self.bot.get_cog(cog).get_commands():
-                    if not cmd.hidden:
-                        fill += "`" + cmd.name + "` "
-                fill = fill[0:-2]
-                fill += "`\n"
-                emb.add_field(name=cog, value=fill)
-        prefix = await self.bot.get_prefixx(self.bot, ctx.message)
-        desc += f"\n\n For more info about a command use `{prefix}help <command>`."
+                cog_obj = self.bot.get_cog(cog)
+                if cog_obj:
+                    for cmd in cog_obj.get_commands():
+                        if not cmd.hidden:
+                            fill += "`" + cmd.name + "` "
+                    if fill:
+                        fill = fill.strip() + "\n"
+                        emb.add_field(name=cog, value=fill, inline=False)
+        if ctx.message:
+            try:
+                prefix = await self.bot.get_prefixx(self.bot, ctx.message)
+            except Exception:
+                prefix = getattr(self.bot, 'prefix', '.')
+        else:
+            prefix = getattr(self.bot, 'prefix', '.')
+
+        desc += f"\nFor more info about a command use `{prefix}help <command>`."
         emb.description = desc
         emb.set_footer(text="~TheWhistler")
-        emb.set_thumbnail(url=self.bot.pfp_url)
+        pfp = getattr(self.bot, 'pfp_url', None)
+        if not pfp and self.bot.user:
+            pfp = self.bot.user.display_avatar.url
+        if pfp:
+            emb.set_thumbnail(url=pfp)
         await ctx.send(embed=emb, view=HelpView())
 
     def embed_for_commands(self, command):
@@ -58,17 +70,21 @@ class Help(commands.Cog):
 
     async def help_for_command(self, ctx, command):
         """Help for a particular command"""
-
+        emb = None
         for cmd in self.bot.commands:
             if command == cmd.name or command in cmd.aliases:
                 emb = self.embed_for_commands(cmd)
-                if emb is not None:
-                    break
-                emb = discord.Embed(title=cmd.name,
-                                    description=cmd.help,
-                                    color=discord.Color.green())
-                break  # Exit the loop once the command is found
-        
+                if emb is None:
+                    emb = discord.Embed(title=cmd.name,
+                                        description=cmd.help or "No description provided.",
+                                        color=discord.Color.green())
+                break
+
+        if emb is None:
+            emb = discord.Embed(title="Command Not Found",
+                                description=f"Could not find a command named `{command}`.",
+                                color=discord.Color.red())
+
         await ctx.send(embed=emb, view=HelpView())
 
     @commands.hybrid_command(name="help")
@@ -83,6 +99,7 @@ class Help(commands.Cog):
         else:
             await self.help_for_command(ctx, command)
 
+    @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.MaxConcurrencyReached):
             await ctx.send("An instance is already running.", view=HelpView())

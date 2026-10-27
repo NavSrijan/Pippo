@@ -7,13 +7,10 @@ import asyncio
 import datetime
 import discord
 from io import BytesIO
-import ipdb
 from discord.ext import commands
 from PIL import Image
 from functions import write_text_on_image
 from views import HintsView, PlotsterView, QuizsterView
-
-hints_obj = HintsView()
 
 def return_folders_from_mode(mode):
     if mode == "bollywood":
@@ -40,14 +37,20 @@ class Quiz_Question():
 
         def __init__(self, get_movie):
             movie = get_movie()
-            movie_actors = movie['actors'].split("|")
+            movie_actors = [a.strip() for a in movie.get('actors', '').split("|") if a.strip()]
             if len(movie_actors) > 2:
                 self.actor = random.choice(movie_actors[:2])
+            elif len(movie_actors) > 0:
+                self.actor = random.choice(movie_actors)
+            else:
+                self.actor = "Lead Actor"
             self.movies = [movie]
-            while len(self.movies) != 4:
+            attempts = 0
+            while len(self.movies) != 4 and attempts < 30:
+                attempts += 1
                 movie_to_append = get_movie()
-                actors = movie_to_append['actors'].split("|")
-                if self.actor in actors:
+                actors = [a.strip() for a in movie_to_append.get('actors', '').split("|") if a.strip()]
+                if self.actor in actors or movie_to_append['name'] in [m['name'] for m in self.movies]:
                     continue
                 self.movies.append(movie_to_append)
             self.actor = self.actor.strip()
@@ -89,20 +92,24 @@ class Quiz_Question():
             ]
             self.question = random.choice(self.question_template).format(
                 self.movie['name'])
-            movie_actors = self.movie['actors'].split("|")
+            movie_actors = [a.strip() for a in self.movie.get('actors', '').split("|") if a.strip()]
             if len(movie_actors) > 2:
                 self.actor = random.choice(movie_actors[:2])
-            else:
+            elif len(movie_actors) > 0:
                 self.actor = random.choice(movie_actors)
+            else:
+                self.actor = "Lead Actor"
             self.movies = [self.movie]
             self.options = []
-            while len(self.movies) != 4:
+            attempts = 0
+            while len(self.options) != 3 and attempts < 30:
+                attempts += 1
                 movie_to_append = get_movie()
-                actors = movie_to_append['actors'].split("|")
-                for i in actors:
-                    if i in movie_actors:
-                        continue
-                self.options.append(random.choice(actors).strip())
+                actors = [a.strip() for a in movie_to_append.get('actors', '').split("|") if a.strip()]
+                valid_actors = [a for a in actors if a not in movie_actors and a not in self.options]
+                if not valid_actors:
+                    continue
+                self.options.append(random.choice(valid_actors))
                 self.movies.append(movie_to_append)
             self.actor = self.actor.strip()
             self.answer = self.actor
@@ -131,12 +138,22 @@ class Quiz_Question():
             self.question = random.choice(self.question_template).format(
                 self.movie['name'])
             self.options = []
-            while len(self.options) != 3:
+            attempts = 0
+            while len(self.options) != 3 and attempts < 50:
+                attempts += 1
                 delta = random.randint(-12, 12)
                 to_append = self.year + delta
-                if to_append>=2023 or to_append == self.year or to_append in self.options:
+                if to_append >= 2025 or to_append < 1950 or to_append == self.year or to_append in self.options:
                     continue
                 self.options.append(to_append)
+
+            # Fallback if range could not find 3 options
+            step = 1
+            while len(self.options) != 3:
+                cand = self.year + step
+                if cand not in self.options and cand != self.year:
+                    self.options.append(cand)
+                step += 1
 
             self.answer = self.year
             self.answer_index = random.randint(0, len(self.options))
@@ -145,8 +162,19 @@ class Quiz_Question():
             self.hint = random.choice([self.movie['description'], self.movie['actors']])
 
         def extract_year(self):
-            datee = self.movie["datePublished"]
-            self.year = int(datee.split("-")[0])
+            datee = self.movie.get("datePublished", "")
+            year = None
+            if datee and "-" in datee:
+                part = datee.split("-")[0]
+                if part.isdigit():
+                    year = int(part)
+            if year is None:
+                y_val = str(self.movie.get("year", ""))
+                if y_val.isdigit():
+                    year = int(y_val)
+                else:
+                    year = 2015
+            self.year = year
 
 class Bollywood_backend():
     QUIZ_TYPES = ["MA", "AM", "YM"]  #, "GM", "DM"]
@@ -277,7 +305,7 @@ def correct_answer_embed(movie, correct=True):
     return emb
 
 def guess_embed(movie, characters_to_exclude, persons, lives, tries,
-                roundd):
+                roundd, hints_obj=None):
     movie_name = movie['name']
     # Create an embed message for the current guess state
     if len(persons) >= 1:
@@ -293,7 +321,9 @@ def guess_embed(movie, characters_to_exclude, persons, lives, tries,
     emb2 = discord.Embed(title=f"Round: {roundd+1}", color=color)
     font_list = ['darling_coffee.ttf']  # Update with the correct path to your font files
     color_list = ['#938448']
-    image = write_text_on_image(f"imgs/b{9-hints_obj.tries}.webp", get_text_after_substitution(movie_name, characters_to_exclude, escape=False), font_list, color_list, start_location=(200, 200))
+    current_tries = tries if tries is not None else 9
+    img_idx = max(0, min(8, 9 - current_tries))
+    image = write_text_on_image(f"imgs/b{img_idx}.webp", get_text_after_substitution(movie_name, characters_to_exclude, escape=False), font_list, color_list, start_location=(200, 200))
     emb2.set_image(url=f"attachment://boll.jpg")
     return emb, emb2, image
 
@@ -339,15 +369,24 @@ def game_over_embed(persons, score, game_type):
     )
     return embed
 
-async def deposit_score(persons, score):
+async def deposit_score(bot, persons, score, game_type="bollywood"):
     # Update the score for each player in the database
+    if not hasattr(bot, 'db') or not bot.db:
+        return
     for i in persons:
-        await self.bot.db.bollywoodHangmanDB.update_score(i, persons[i], score)
-        await self.bot.db.coins.add_coins(i, coins=5*persons[i])
+        try:
+            if game_type == "plotster":
+                await bot.db.plotsterDB.update_score(i, persons[i], score)
+            else:
+                await bot.db.bollywoodHangmanDB.update_score(i, persons[i], score)
+            await bot.db.coins.add_coins(i, coins=5*persons[i])
+        except Exception as e:
+            print(f"Error depositing score: {e}")
 
 async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, timeout=60):
     # Initialize the Bollywood backend with the specified year range and data folder
     bollywood_backend = Bollywood_backend(starting_year, ending_year, folders=folders)
+    hints_obj = HintsView()
 
     # Limit the timeout to 60 seconds if it's set higher than 120 seconds
     if timeout > 120:
@@ -377,7 +416,7 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
         while hints_obj.tries > 0:
             embed, embed_pic, image = guess_embed(movie, characters_to_exclude,
                                         persons, lives, hints_obj.tries,
-                                        score)
+                                        score, hints_obj=hints_obj)
             if counter % 5 == 0:
                 current_msg = await ctx.channel.send(embeds=(embed_pic,
                                                             embed),
@@ -395,7 +434,7 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
                 await ctx.send("Looks like you didn't wanna play...")
                 await ctx.channel.send(embed=correct_answer_embed(movie, correct=False))
                 try:
-                    await deposit_score(persons, score)
+                    await deposit_score(bot, persons, score, game_type)
                 except:
                     pass
                 return
@@ -404,7 +443,7 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
             if msg.content.lower() in [f"{prefix}exit", f"{prefix}end"]:
                 await ctx.send("Exiting...")
                 try:
-                    await deposit_score(persons, score)
+                    await deposit_score(bot, persons, score, game_type)
                 except:
                     pass
                 return
@@ -433,7 +472,7 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
                 lives -= 1
                 continue
     await ctx.channel.send(embed=game_over_embed(persons, score, game_type))
-    await deposit_score(persons, score)
+    await deposit_score(bot, persons, score, game_type)
 
 
 """
@@ -441,26 +480,34 @@ Poster pixelate
 """
 def pixelate_image(image_url, pixel_size):
     # Open the image
-    response = requests.get(image_url)
-    if response.status_code == 200:
-        image_data = response.content
-        image = Image.open(BytesIO(image_data))
-        
-        # Calculate the size of the pixelated image
-        width, height = image.size
-        pixelated_width = (width // pixel_size) * pixel_size
-        pixelated_height = (height // pixel_size) * pixel_size
-        
-        # Resize the image to reduce detail, then resize it back to its original size
-        image = image.resize((pixelated_width // pixel_size, pixelated_height // pixel_size), Image.BILINEAR)
-        image = image.resize((pixelated_width, pixelated_height), Image.NEAREST)
-        
-        with BytesIO() as output:
-            image.save(output, format='JPEG', optimize=True, quality=40)
-            output.seek(0)
-            return discord.File(output, filename='pixelate_img.jpg')
-    else:
-        raise Exception(f"Failed to fetch image from URL: {url}")
+    try:
+        response = requests.get(image_url, timeout=10)
+        if response.status_code == 200:
+            image_data = response.content
+            image = Image.open(BytesIO(image_data))
+            
+            # Calculate the size of the pixelated image
+            width, height = image.size
+            pixel_size = max(1, pixel_size)
+            pixelated_width = max(1, (width // pixel_size) * pixel_size)
+            pixelated_height = max(1, (height // pixel_size) * pixel_size)
+            
+            # Resize the image to reduce detail, then resize it back to its original size
+            image = image.resize((max(1, pixelated_width // pixel_size), max(1, pixelated_height // pixel_size)), Image.BILINEAR)
+            image = image.resize((pixelated_width, pixelated_height), Image.NEAREST)
+            
+            with BytesIO() as output:
+                image.save(output, format='JPEG', optimize=True, quality=40)
+                output.seek(0)
+                return discord.File(output, filename='pixelate_img.jpg')
+    except Exception as e:
+        print(f"Error pixelating image {image_url}: {e}")
+    # Return a fallback 100x100 solid image if fetching or pixelating fails
+    fallback = Image.new('RGB', (100, 100), color=(70, 70, 70))
+    with BytesIO() as output:
+        fallback.save(output, format='JPEG')
+        output.seek(0)
+        return discord.File(output, filename='pixelate_img.jpg')
 
 def pixelate_game_start_embed(help_mode=False):
     # Create an embed message for the game start
@@ -563,7 +610,7 @@ async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
                 await ctx.channel.send(embed=pixelate_game_over_embed(persons, score))
 
                 try:
-                    await deposit_score(persons, score)
+                    await deposit_score(bot, persons, score, "bollywood")
                 except:
                     pass
                 return
@@ -574,7 +621,7 @@ async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
                 await ctx.channel.send(embed=pixelate_game_over_embed(persons, score))
                 await ctx.send("Exiting...")
                 try:
-                    await deposit_score(persons, score)
+                    await deposit_score(bot, persons, score, "bollywood")
                 except:
                     pass
                 return
@@ -599,7 +646,7 @@ async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
 
     await ctx.channel.send(embed=pixelate_game_over_embed(persons, score))
     try:
-        await deposit_score(persons, score)
+        await deposit_score(bot, persons, score, "bollywood")
     except:
         pass
 
@@ -626,7 +673,7 @@ def convert_movie_to_sendable(movie_name, words_guessed):
         movie = re.sub(regex, func, movie_name, flags=re.IGNORECASE)
     else:
         regex = r"[A-Za-z]"
-        movie = re.sub(regex, "\_", movie_name)
+        movie = re.sub(regex, r"\_", movie_name)
 
     return movie
 
@@ -714,7 +761,7 @@ async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
                     await ctx.channel.send(embed=game_over_embed(persons, score, game_type))
                     await ctx.send("Looks like you didn't wanna play...")
                     try:
-                        await deposit_score(persons, score - 1)
+                        await deposit_score(bot, persons, max(0, score - 1), game_type)
                     except:
                         pass
                     return
@@ -732,7 +779,7 @@ async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
                 await ctx.channel.send(embed=game_over_embed(persons, score, game_type))
                 await ctx.send("Exiting...")
                 try:
-                    await deposit_score(persons, score - 1)
+                    await deposit_score(bot, persons, max(0, score - 1), game_type)
                 except:
                     pass
                 return
@@ -758,7 +805,7 @@ async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
                 break
 
     await ctx.channel.send(embed=game_over_embed(persons, score, game_type))
-    await deposit_score(persons, score)
+    await deposit_score(bot, persons, score, game_type)
 
 
 def create_question_embed(movie, round_number) -> discord.Embed:

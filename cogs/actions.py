@@ -1,22 +1,6 @@
-from typing import Literal
-from enum import Enum
-import datetime
-from zoneinfo import ZoneInfo
-import time
 import random
-import re
-import requests
-import json
-import asyncio
-
-from discord.ext import commands, tasks
+from discord.ext import commands
 import discord
-
-import ipdb
-import hashlib
-import requests
-from PIL import Image, ImageDraw, ImageOps
-from io import BytesIO
 
 class Actions(commands.Cog):
     """Actions commands"""
@@ -25,21 +9,17 @@ class Actions(commands.Cog):
         self.bot = bot
 
     @commands.hybrid_command(name="kiss")
-    async def kiss(self, ctx, user:discord.Member=None):
-        """Kiss"""
-        emb = discord.Embed()
-        if ctx.author.nick:
-            name2 = ctx.author.nick
+    async def kiss(self, ctx, user: discord.Member = None):
+        """Kiss another user or air"""
+        emb = discord.Embed(color=discord.Color.fuchsia())
+        author_name = ctx.author.display_name
+
+        if user is None:
+            emb.title = f"{author_name} kissed air"
         else:
-            name2 = ctx.author.name
-        if user==None:
-            emb.title = f"{name2} kissed air"
-        else:
-            if user.nick:
-                name = user.nick
-            else:
-                name = user.name
-            if random.choices([True, False], weights=[60, 40])[0]:
+            target_name = user.display_name
+            accepted = random.choices([True, False], weights=[60, 40])[0]
+            if accepted:
                 # ACCEPTANCE
                 lines = [
                     "{} planted a soft kiss on {}'s lips.",
@@ -55,18 +35,18 @@ class Actions(commands.Cog):
                 ]
 
                 gifs = [
-                        "https://media.tenor.com/28PRxZllZ88AAAAS/skitchura-skitchura-d.gif",
-                        "https://media.tenor.com/FNHYYfHcKLkAAAAC/katrina-kaif-ranbir-kapoor.gif",
-                        "https://media.tenor.com/X5krze_s5rIAAAAS/beyhadh2-mayra.gif",
-                        "https://media.tenor.com/8sbfoBtT628AAAAC/ye-rishta-kya-kehlata-hai-indian-television-soap-opera.gif",
-                        "https://media.tenor.com/weXHd8OOT0gAAAAC/kiss-enthiran.gif",
-                        "https://media.tenor.com/MOfAaO_0iIYAAAAd/kiss-ramesh.gif",
-                        "https://media.tenor.com/FmmWlSywFBkAAAAd/bollywood2-deepika-padukone.gif",
-                        "https://media.tenor.com/r3iZ8UJc-AwAAAAd/%E1%83%9A%E1%83%90%E1%83%9B%E1%83%90%E1%83%96%E1%83%9D-flirti.gif",
-                        "https://media.tenor.com/41b3mGyJrNsAAAAd/alia-bhatt-sidharth-malhotra.gif",
-                        "https://media.tenor.com/wANmca86o1kAAAAS/petekao-dark-blue-kiss.gif"
-                        ]
-                
+                    "https://media.tenor.com/28PRxZllZ88AAAAS/skitchura-skitchura-d.gif",
+                    "https://media.tenor.com/FNHYYfHcKLkAAAAC/katrina-kaif-ranbir-kapoor.gif",
+                    "https://media.tenor.com/X5krze_s5rIAAAAS/beyhadh2-mayra.gif",
+                    "https://media.tenor.com/8sbfoBtT628AAAAC/ye-rishta-kya-kehlata-hai-indian-television-soap-opera.gif",
+                    "https://media.tenor.com/weXHd8OOT0gAAAAC/kiss-enthiran.gif",
+                    "https://media.tenor.com/MOfAaO_0iIYAAAAd/kiss-ramesh.gif",
+                    "https://media.tenor.com/FmmWlSywFBkAAAAd/bollywood2-deepika-padukone.gif",
+                    "https://media.tenor.com/r3iZ8UJc-AwAAAAd/%E1%83%9A%E1%83%90%E1%83%9B%E1%83%90%E1%83%96%E1%83%9D-flirti.gif",
+                    "https://media.tenor.com/41b3mGyJrNsAAAAd/alia-bhatt-sidharth-malhotra.gif",
+                    "https://media.tenor.com/wANmca86o1kAAAAS/petekao-dark-blue-kiss.gif"
+                ]
+                emb.title = random.choice(lines).format(author_name, target_name)
             else:
                 # REJECTION
                 lines = [
@@ -80,21 +60,20 @@ class Actions(commands.Cog):
                     "{} offered a polite smile, signaling that their lips were off-limits to {}.",
                     "{} withdrew slightly, creating a physical distance that prevented {}'s soft lips from brushing against theirs.",
                     "{} politely refused {}'s advances, knowing that their lips meeting would only create a memory of heartache."
-                        ]
+                ]
 
                 gifs = [
-                        "https://media.tenor.com/P3FvJNYdca4AAAAC/%E0%A4%A8%E0%A4%B9%E0%A5%80%E0%A4%82-%E0%A4%A8%E0%A4%BE.gif",
-                        "https://media.tenor.com/WJavYXjegxQAAAAC/crying-oru-indian-pranayakadha.gif",
-                        "https://media.tenor.com/s3E5Yd67X88AAAAd/cry-about-it-mald.gif",
-                        "https://media.tenor.com/KnvA9TyNb2cAAAAC/china-trespasses-indian-territory-bhosdike.gif",
-                        "https://media.tenor.com/5xAy0jp9aCAAAAAC/vaak-kamal-haasan.gif",
-                        "https://media.tenor.com/ONDeXUgmKRkAAAAS/hadeel928-%D8%AD%D8%B2%D9%86.gif",
-                        "https://media.tenor.com/_lBztfGBlV8AAAAC/nikal.gif",
-                        "https://media.tenor.com/-7M8TqyT0dsAAAAd/hrithik-roshan.gif"
-                        ]
+                    "https://media.tenor.com/P3FvJNYdca4AAAAC/%E0%A4%A8%E0%A4%B9%E0%A5%80%E0%A4%82-%E0%A4%A8%E0%A4%BE.gif",
+                    "https://media.tenor.com/WJavYXjegxQAAAAC/crying-oru-indian-pranayakadha.gif",
+                    "https://media.tenor.com/s3E5Yd67X88AAAAd/cry-about-it-mald.gif",
+                    "https://media.tenor.com/KnvA9TyNb2cAAAAC/china-trespasses-indian-territory-bhosdike.gif",
+                    "https://media.tenor.com/5xAy0jp9aCAAAAAC/vaak-kamal-haasan.gif",
+                    "https://media.tenor.com/ONDeXUgmKRkAAAAS/hadeel928-%D8%AD%D8%B2%D9%86.gif",
+                    "https://media.tenor.com/_lBztfGBlV8AAAAC/nikal.gif",
+                    "https://media.tenor.com/-7M8TqyT0dsAAAAd/hrithik-roshan.gif"
+                ]
+                emb.title = random.choice(lines).format(target_name, author_name)
 
-
-            emb.title = random.choice(lines).format(name, name2)
             emb.set_image(url=random.choice(gifs))
 
         await ctx.reply(embed=emb)

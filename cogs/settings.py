@@ -1,13 +1,9 @@
 from typing import Literal
-from enum import Enum
 import datetime
 from zoneinfo import ZoneInfo
 
 from discord.ext import commands, tasks
 from discord import app_commands
-
-from database import Servers
-import ipdb
 import discord
 
 
@@ -17,54 +13,70 @@ class Settings(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    @commands.has_permissions(manage_guild=True)
     @commands.hybrid_command(name="change_prefix")
     async def change_prefix(self, ctx, prefix: str):
-        """Change your server's prefix to whatever you like. Default is """
+        """Change your server's prefix to whatever you like. Default is ."""
+        if ctx.guild is None:
+            await ctx.reply("Prefix can only be changed inside a server.")
+            return
         await self.bot.db.servers.prefix_add(ctx.guild.id, prefix)
-        await ctx.reply(f"Your prefix has been updated to {prefix}")
+        await ctx.reply(f"Your prefix has been updated to `{prefix}`")
+
+    @change_prefix.error
+    async def change_prefix_error(self, ctx, error):
+        if isinstance(error, commands.MissingPermissions):
+            await ctx.reply("You need `Manage Server` permission to change the prefix.")
+        else:
+            await ctx.reply("Could not change prefix. Please try again.")
 
     @commands.hybrid_command(name="leaderboard")
     async def leaderboard(self, ctx, command: str):
         """See the leaderboard of a particular command"""
         command_map = {"bollywood": "bollywood_points", "plotster": "plotster_points"}
+        name_map = {"bollywood": "Bollywood", "plotster": "Plotster"}
+        cmd_key = command.lower()
+        if cmd_key not in command_map:
+            await ctx.reply(f"Command '{command}' not found. Available leaderboards: `bollywood`, `plotster`.")
+            return
+
+        table_name = command_map[cmd_key]
+        sql = f"SELECT user_id, points FROM {table_name} ORDER BY points DESC LIMIT 10"
         try:
-            command = command_map[command.lower()]
-            sql = f"SELECT * FROM {command} ORDER BY points DESC LIMIT 10"
             res = await self.bot.db.view(sql)
-            desc = ""
-            j=1
-            for i in res:
-                desc+=f"{j}. <@{i['user_id']}>: {i['points']}\n"
-                j+=1
-            await ctx.reply(embed=discord.Embed(title=f"{command} Leaderboard", description=desc))
-        except:
-            await ctx.reply("Command not found.")
+            if not res:
+                desc = "No scores recorded yet."
+            else:
+                desc = ""
+                for j, i in enumerate(res, 1):
+                    desc += f"{j}. <@{i['user_id']}>: {i['points']}\n"
+            await ctx.reply(embed=discord.Embed(title=f"{name_map[cmd_key]} Leaderboard", description=desc, color=discord.Color.gold()))
+        except Exception as e:
+            await ctx.reply("Could not load leaderboard at this moment.")
 
     @commands.hybrid_command(name="suggest")
     async def suggest(self, ctx, feedback_text: str):
         """Feedback to the author"""
         THEWHISTLER = self.bot.THEWHISTLER
-        if ctx.interaction:
-            sugg = feedback_text
-            thewhistler = self.bot.get_user(THEWHISTLER)
-            emb = discord.Embed(description=sugg)
-            emb.set_author(name=ctx.message.author.display_name +
-                           " suggested.",
-                           icon_url=ctx.message.author.avatar.url)
-            emb.color = discord.Color.blurple()
-            await thewhistler.send(embed=emb)
-            await ctx.reply("Your suggestion has been noted.", ephemeral=True)
-        else:
-            sugg = ctx.message.content
-            thewhistler = self.bot.get_user(THEWHISTLER)
-            emb = discord.Embed(description=sugg)
-            emb.set_author(name=ctx.message.author.display_name +
-                           " suggested.",
-                           icon_url=ctx.message.author.avatar.url)
-            emb.color = discord.Color.blurple()
-            await thewhistler.send(embed=emb)
-            await ctx.reply("Your suggestion has been noted.", ephemeral=True)
-            await ctx.message.delete()
+        try:
+            thewhistler = self.bot.get_user(THEWHISTLER) or await self.bot.fetch_user(THEWHISTLER)
+        except Exception:
+            thewhistler = None
+
+        if thewhistler:
+            emb = discord.Embed(description=feedback_text, color=discord.Color.blurple())
+            emb.set_author(name=f"{ctx.author.display_name} suggested.", icon_url=ctx.author.display_avatar.url)
+            try:
+                await thewhistler.send(embed=emb)
+            except Exception:
+                pass
+
+        await ctx.reply("Your suggestion has been noted.", ephemeral=True)
+        if not ctx.interaction and ctx.message:
+            try:
+                await ctx.message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
 
 async def setup(bot):
