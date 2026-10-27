@@ -1,0 +1,11 @@
+
+# TOML file for the character Nav
+
+name = "Van"
+
+[stats]
+hp = 100 		# Health Points
+ap = 10  		# Attack Points
+dp = 5   		# Defence Points
+heal_multiplier = 5 	# Heal multiplier
+mana_gain = 5		# Mana gain per move

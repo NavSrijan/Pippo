@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import discord
-from dateutil import tz
+from zoneinfo import ZoneInfo
 import pickle as pkl
 from io import BytesIO
 import requests
@@ -24,13 +24,9 @@ def utc_to_local(utc_dt):
 
 
 def utc_to_ist(utc_dt):
-    from_zone = tz.tzutc()
-    to_zone = tz.gettz("Asia/Kolkata")
-
-    utc_dt = utc_dt.replace(tzinfo=from_zone)
-    cc = utc_dt.astimezone(to_zone)
-
-    return cc
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    return utc_dt.astimezone(ZoneInfo("Asia/Kolkata"))
 
 
 def download_and_return_image(url, filename="emojiSuggestion.png") -> discord.File:

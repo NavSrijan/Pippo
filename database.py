@@ -39,9 +39,11 @@ class Servers(Database):
 
     async def prefix_add(self, server_id, prefix):
         """Add a server's prefix to database"""
-        sql = f"UPDATE {self.tableName} SET prefix= $1 WHERE server_id=$2;"
-        sql2 = f"INSERT INTO {self.tableName} (server_id, prefix) VALUES ($2, $1);"
-        await self.update_or_insert(sql, sql2, prefix, server_id)
+        await self.execute(
+            "INSERT INTO servers (server_id, prefix) VALUES ($1, $2) "
+            "ON CONFLICT (server_id) DO UPDATE SET prefix = EXCLUDED.prefix;",
+            server_id, prefix,
+        )
 
     async def fetch_prefix(self, server_id):
         """Fetch a server's prefix from database"""
@@ -91,7 +93,7 @@ class Analytics(Database):
 
     async def insert_command(self, command, server_id, user_id):
         sql = f"INSERT INTO {self.tableName} (command, server_id, user_id, time_of_command) VALUES ($1, $2, $3, $4);"
-        await self.execute(sql, command, server_id, user_id, datetime.datetime.now())
+        await self.execute(sql, command, server_id, user_id, datetime.datetime.now(datetime.UTC).replace(tzinfo=None))
 
 
 class BollywoodHangmanDB(Database):
@@ -111,14 +113,13 @@ class BollywoodHangmanDB(Database):
         await self.execute(sql, user_id, points, rounds)
 
     async def update_score(self, user_id, points, rounds):
-        sql = f"""UPDATE {self.tableName}
-        SET points = points+ $1,
-        rounds = rounds + $2
-        WHERE user_id=$3;
-        """
-        sql2 = f"INSERT INTO {self.tableName} (user_id, points, rounds) VALUES ($3, $1, $2);"
-
-        await self.update_or_insert(sql, sql2, points, rounds, user_id)
+        await self.execute(
+            "INSERT INTO bollywood_points (user_id, points, rounds) VALUES ($1, $2, $3) "
+            "ON CONFLICT (user_id) DO UPDATE SET "
+            "points = COALESCE(bollywood_points.points, 0) + EXCLUDED.points, "
+            "rounds = COALESCE(bollywood_points.rounds, 0) + EXCLUDED.rounds;",
+            user_id, points, rounds,
+        )
 
 
 class PlotsterDB(Database):
@@ -138,14 +139,14 @@ class PlotsterDB(Database):
         await self.execute(sql, user_id, points, rounds)
 
     async def update_score(self, user_id, points, rounds):
-        sql = """UPDATE {}
-        SET points = points+ $1,
-        rounds = rounds + $2
-        WHERE user_id=$3;
-        """.format(self.tableName)
-        sql2 = f"INSERT INTO {self.tableName} (user_id, points, rounds) VALUES ($3, $1, $2);"
+        await self.execute(
+            "INSERT INTO plotster_points (user_id, points, rounds) VALUES ($1, $2, $3) "
+            "ON CONFLICT (user_id) DO UPDATE SET "
+            "points = COALESCE(plotster_points.points, 0) + EXCLUDED.points, "
+            "rounds = COALESCE(plotster_points.rounds, 0) + EXCLUDED.rounds;",
+            user_id, points, rounds,
+        )
 
-        await self.update_or_insert(sql, sql2, points, rounds, user_id)
 
 class Coins(Database):
     """CREATE TABLE "points" (
@@ -166,16 +167,42 @@ class Coins(Database):
         self.commands_dict = {command['name']: command for command in commands_data}
 
     async def add_coins(self, user_id, command_name="", coins=0):
-        sql = """UPDATE {}
-        SET coins = coins+ $1
-        WHERE user_id=$2;
-        """.format(self.tableName)
-        sql2 = f"INSERT INTO {self.tableName} (user_id, coins) VALUES ($2, $1);"
-
-        if coins==0 and command_name!="":
+        if coins == 0 and command_name:
             coins = self.commands_dict.get(command_name, {}).get('coins', 0)
+        await self.execute(
+            "INSERT INTO points (user_id, coins) VALUES ($1, $2) "
+            "ON CONFLICT (user_id) DO UPDATE SET coins = points.coins + EXCLUDED.coins;",
+            user_id, coins,
+        )
 
-        await self.update_or_insert(sql, sql2, coins, user_id)
+    async def transfer(self, sender_id, recipient_id, coins):
+        """Move a positive balance atomically, including concurrent transfers."""
+        if coins <= 0 or sender_id == recipient_id:
+            return False
+        async with self.pool.acquire() as con:
+            async with con.transaction():
+                # Insert and lock accounts in a stable order for opposing transfers.
+                for user_id in sorted((sender_id, recipient_id)):
+                    await con.execute(
+                        "INSERT INTO points (user_id, coins) VALUES ($1, 0) "
+                        "ON CONFLICT (user_id) DO NOTHING;", user_id,
+                    )
+                await con.fetch(
+                    "SELECT user_id FROM points WHERE user_id = ANY($1::bigint[]) "
+                    "ORDER BY user_id FOR UPDATE;", [sender_id, recipient_id],
+                )
+                debited = await con.fetchval(
+                    "UPDATE points SET coins = coins - $1 "
+                    "WHERE user_id = $2 AND coins >= $1 RETURNING user_id;",
+                    coins, sender_id,
+                )
+                if debited is None:
+                    return False
+                await con.execute(
+                    "UPDATE points SET coins = coins + $1 WHERE user_id = $2;",
+                    coins, recipient_id,
+                )
+        return True
 
     async def deduct_coins(self, user_id, coins=0):
         sql = """UPDATE {}
@@ -210,10 +237,15 @@ class Characters(Database):
 
     async def insert_character(self, user_id, show_name=None, cartoon_character=None, dog_breed=None, cat_breed=None):
         """Insert or update a character entry in the table, preserving non-null existing fields"""
-        sql = f"INSERT INTO {self.tableName} (user_id, show_name, cartoon_character, dog_breed, cat_breed) VALUES ($1, $2, $3, $4, $5);"
-        sql2 = f"UPDATE {self.tableName} SET show_name = COALESCE($2, show_name), cartoon_character = COALESCE($3, cartoon_character), dog_breed = COALESCE($4, dog_breed), cat_breed = COALESCE($5, cat_breed) WHERE user_id = $1;"
-
-        await self.update_or_insert(sql2, sql, user_id, show_name, cartoon_character, dog_breed, cat_breed)
+        await self.execute(
+            "INSERT INTO characters (user_id, show_name, cartoon_character, dog_breed, cat_breed) "
+            "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (user_id) DO UPDATE SET "
+            "show_name = COALESCE(EXCLUDED.show_name, characters.show_name), "
+            "cartoon_character = COALESCE(EXCLUDED.cartoon_character, characters.cartoon_character), "
+            "dog_breed = COALESCE(EXCLUDED.dog_breed, characters.dog_breed), "
+            "cat_breed = COALESCE(EXCLUDED.cat_breed, characters.cat_breed);",
+            user_id, show_name, cartoon_character, dog_breed, cat_breed,
+        )
 
     async def update_character(self, user_id, show_name=None, cartoon_character=None, dog_breed=None, cat_breed=None):
         """Update the details of a character entry in the table"""

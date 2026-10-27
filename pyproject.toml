@@ -1,0 +1,25 @@
+[project]
+name = "pippo"
+version = "0.2.0"
+description = "Discord movie trivia and party games"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools]
+py-modules = ["bot", "database", "flood", "functions", "views", "config"]
+
+[tool.setuptools.packages.find]
+include = ["cogs*", "utils*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
+filterwarnings = [
+    # discord.py 2.7.1 calls this deprecated stdlib helper internally.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning:discord.*",
+]

@@ -155,8 +155,8 @@ class Animals(commands.Cog):
         await ctx.reply(embed=emb)
 
     @commands.hybrid_command(name="meow")
-    async def meow(self, ctx):
-        """Guess the breed of a cat"""
+    async def meow(self, ctx, solo: bool = False):
+        """Guess the breed of a cat; set solo to keep the quiz to yourself."""
         with open('data/breeds/catBreeds.json', 'r') as f:
             breeds_data = json.load(f)
 
@@ -174,13 +174,13 @@ class Animals(commands.Cog):
         emb = discord.Embed(title="Can you guess the breed?", color=discord.Color.blue())
         emb.set_image(url=img_url)
 
-        view = BreedGuessView(answer, sample_breeds)
+        view = BreedGuessView(answer, sample_breeds, author_id=ctx.author.id if solo else None)
         out = await ctx.reply(embed=emb, view=view)
         view.out = out
 
     @commands.hybrid_command(name="woof")
-    async def woof(self, ctx):
-        """Guess the breed of a dog"""
+    async def woof(self, ctx, solo: bool = False):
+        """Guess the breed of a dog; set solo to keep the quiz to yourself."""
         with open('data/breeds/dogBreeds.json', 'r') as f:
             breeds_data = json.load(f)
 
@@ -198,7 +198,7 @@ class Animals(commands.Cog):
         emb = discord.Embed(title="Can you guess the breed?", color=discord.Color.blue())
         emb.set_image(url=img_url)
 
-        view = BreedGuessView(answer, sample_breeds)
+        view = BreedGuessView(answer, sample_breeds, author_id=ctx.author.id if solo else None)
         out = await ctx.reply(embed=emb, view=view)
         view.out = out
 
@@ -206,8 +206,7 @@ class Animals(commands.Cog):
     async def breedme(self, ctx, user: discord.Member = None):
         """Which breed of dog are you?"""
         def generate_random_number(user_id, n):
-            random.seed(user_id)
-            return random.randint(0, n)
+            return random.Random(user_id).randint(0, n)
 
         def dog_age_to_human_age(dog_age):
             if dog_age <= 0:
@@ -259,8 +258,7 @@ class Animals(commands.Cog):
     async def meowme(self, ctx, user: discord.Member = None):
         """Which breed of cat are you?"""
         def generate_random_number(user_id, n):
-            random.seed(user_id)
-            return random.randint(0, n)
+            return random.Random(user_id).randint(0, n)
 
         def dog_age_to_human_age(dog_age):
             if dog_age <= 0:
@@ -318,4 +316,3 @@ class Animals(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Animals(bot))
-

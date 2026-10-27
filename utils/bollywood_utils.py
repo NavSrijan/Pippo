@@ -3,14 +3,16 @@ import requests
 import random
 import csv
 import os
+from pathlib import Path
 import asyncio
 import datetime
 import discord
 from io import BytesIO
 from discord.ext import commands
 from PIL import Image
+from rapidfuzz import fuzz
 from functions import write_text_on_image
-from views import HintsView, PlotsterView, QuizsterView
+from views import HintsView, PlotsterView, QuizsterView, GameLobbyView
 
 def return_folders_from_mode(mode):
     if mode == "bollywood":
@@ -183,8 +185,8 @@ class Bollywood_backend():
         self.folders = folders
         if starting_year < 1980:
             starting_year = 1980
-        if ending_year > 2023:
-            ending_year = 2023
+        if ending_year < starting_year:
+            raise commands.BadArgument("The ending year must not precede the starting year.")
         self.starting_year = starting_year
         self.ending_year = ending_year
         self.difficulty = difficulty
@@ -216,6 +218,8 @@ class Bollywood_backend():
                 starting_year, self.variables_for_difficulty[self.difficulty]
                 ['questions_to_read_from_each_year']))
             starting_year += 1
+        if not self.movies:
+            raise commands.BadArgument("No movie data is available for that year range.")
 
     def get_random_movie(self):
         i = random.choice(self.movies)
@@ -226,20 +230,12 @@ class Bollywood_backend():
     def get_movie_plotster(self):
         if len(self.movies) <= 1:
             self.load_movies()
-        movies_to_remove = []
-        i = random.choice(self.movies)
-        movies_to_remove.append(i)
-
-        while i['description'] == "":
-            i = random.choice(self.movies)
-            movies_to_remove.append(i)
-
-        for m in movies_to_remove:
-            try:
-                self.movies.remove(m)
-            except:
-                pass
-        return i
+        candidates = [movie for movie in self.movies if movie.get('description')]
+        if not candidates:
+            raise commands.BadArgument("No movie descriptions are available for that year range.")
+        movie = random.choice(candidates)
+        self.movies.remove(movie)
+        return movie
 
     def get_quiz_question(self, type_of_question=None, difficulty="easy"):
         """Get an object suitable for the quiz question"""
@@ -266,7 +262,9 @@ class Bollywood_backend():
     def read_movies(self, year, n):
         movies = []
         for i in self.folders:
-            movies = movies + self.read_csv(f"{i}{year}_data.csv")[:n]
+            path = Path(i) / f"{year}_data.csv"
+            if path.is_file():
+                movies.extend(self.read_csv(path)[:n])
         #movies = self.read_csv(f"{self.folder}{year}_data.csv")[:n]
         return movies
 
@@ -277,9 +275,9 @@ class Bollywood_backend():
         return rows
 
 
-def check(ctx, message):
+def check(ctx, message, solo_user_id=None):
     # Check if the message is from the same channel as the command
-    return message.channel == ctx.channel
+    return message.channel == ctx.channel and (solo_user_id is None or message.author.id == solo_user_id)
 
 def get_text_after_substitution(movie_name, characters_to_exclude="", escape=True):
     # Generate the movie name with unguessed letters replaced by underscores
@@ -364,6 +362,7 @@ def game_over_embed(persons, score, game_type):
         title="Game Over!",
         description=f"Score: **{score}**\n\n{persons_str}",
         color=discord.Color.from_str("#D01819"))
+    embed.set_footer(text="Run /play to start another game.")
     embed.set_image(
             url=url
     )
@@ -383,10 +382,11 @@ async def deposit_score(bot, persons, score, game_type="bollywood"):
         except Exception as e:
             print(f"Error depositing score: {e}")
 
-async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, timeout=60):
+async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, timeout=60, solo=False):
     # Initialize the Bollywood backend with the specified year range and data folder
     bollywood_backend = Bollywood_backend(starting_year, ending_year, folders=folders)
     hints_obj = HintsView()
+    hints_obj.author_id = ctx.author.id if solo else None
 
     # Limit the timeout to 60 seconds if it's set higher than 120 seconds
     if timeout > 120:
@@ -398,7 +398,9 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
     score = 0
     persons = {}
     # Embed before the game starts, containing the help message
-    await ctx.channel.send(embed=game_start_embed(game_type))
+    start_embed = game_start_embed(game_type)
+    start_embed.description += "\n\n" + ("Solo game: only your guesses and hint buttons count." if solo else "Everyone in this channel can guess.")
+    await ctx.channel.send(embed=start_embed)
     await asyncio.sleep(5) # Time to read the help message
     while lives != 0:
         hints_obj.tries = 9
@@ -414,7 +416,7 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
         hints_obj.random_letter = random.choice(list(answer))
         hints_obj.synopsis = movie['description']
         while hints_obj.tries > 0:
-            embed, embed_pic, image = guess_embed(movie, characters_to_exclude,
+            embed, embed_pic, image = await asyncio.to_thread(guess_embed, movie, characters_to_exclude,
                                         persons, lives, hints_obj.tries,
                                         score, hints_obj=hints_obj)
             if counter % 5 == 0:
@@ -428,7 +430,7 @@ async def play_game(ctx, bot, game_type, starting_year, ending_year, folders, ti
 
             try:
                 msg = await bot.wait_for('message',
-                                            check=lambda m: check(ctx, m),
+                                            check=lambda m: not m.author.bot and check(ctx, m, ctx.author.id if solo else None),
                                             timeout=timeout)
             except asyncio.exceptions.TimeoutError:
                 await ctx.send("Looks like you didn't wanna play...")
@@ -484,7 +486,7 @@ def pixelate_image(image_url, pixel_size):
         response = requests.get(image_url, timeout=10)
         if response.status_code == 200:
             image_data = response.content
-            image = Image.open(BytesIO(image_data))
+            image = Image.open(BytesIO(image_data)).convert("RGB")
             
             # Calculate the size of the pixelated image
             width, height = image.size
@@ -493,8 +495,8 @@ def pixelate_image(image_url, pixel_size):
             pixelated_height = max(1, (height // pixel_size) * pixel_size)
             
             # Resize the image to reduce detail, then resize it back to its original size
-            image = image.resize((max(1, pixelated_width // pixel_size), max(1, pixelated_height // pixel_size)), Image.BILINEAR)
-            image = image.resize((pixelated_width, pixelated_height), Image.NEAREST)
+            image = image.resize((max(1, pixelated_width // pixel_size), max(1, pixelated_height // pixel_size)), Image.Resampling.BILINEAR)
+            image = image.resize((pixelated_width, pixelated_height), Image.Resampling.NEAREST)
             
             with BytesIO() as output:
                 image.save(output, format='JPEG', optimize=True, quality=40)
@@ -555,6 +557,7 @@ def pixelate_game_over_embed(persons, score):
         title="Game Over!",
         description=f"Score: **{score}**\n\n{persons_str}",
         color=discord.Color.from_str("#D01819"))
+    embed.set_footer(text="Run /play to start another game.")
     embed.set_image(
             url=url
     )
@@ -569,7 +572,7 @@ def compare_movie_name(movie_name, guess):
     return normalized_input == normalized_movie_name
 
 
-async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
+async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60, solo=False):
     # Limit the timeout to 60 seconds if it's set higher than 120 seconds
     if timeout > 120:
         timeout = 60
@@ -582,7 +585,9 @@ async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
     score = 0
     persons = {}
     # Embed before the game starts, containing the help message
-    await ctx.channel.send(embed=pixelate_game_start_embed())
+    start_embed = pixelate_game_start_embed()
+    start_embed.description += "\n\n" + ("Solo game: only your guesses count." if solo else "Everyone in this channel can guess.")
+    await ctx.channel.send(embed=start_embed)
     await asyncio.sleep(5) # Time to read the help message
 
     while lives!=0:
@@ -591,7 +596,7 @@ async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
         quality = 100
 
         while quality > 0:
-            embed, embed_pic, image = pixelate_guess_embed(movie, persons, lives, score, quality)
+            embed, embed_pic, image = await asyncio.to_thread(pixelate_guess_embed, movie, persons, lives, score, quality)
 
             if counter % 5 == 0:
                 current_msg = await ctx.channel.send(embeds=(embed_pic,
@@ -602,7 +607,7 @@ async def play_pixelate(ctx, bot, mode, starting_year, ending_year, timeout=60):
 
             try:
                 msg = await bot.wait_for('message',
-                                            check=lambda m: check(ctx, m),
+                                            check=lambda m: not m.author.bot and check(ctx, m, ctx.author.id if solo else None),
                                             timeout=timeout)
             except asyncio.exceptions.TimeoutError:
                 await ctx.send("Looks like you didn't wanna play...")
@@ -714,7 +719,7 @@ def plotster_guess_embed(movie, persons, lives, roundd,
     emb.set_footer(text=f"Time Left: {time_left:0,.2f}")
     return emb, emb2
 
-async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
+async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60, solo=False):
     game_type = "plotster"
     # Limit the timeout to 60 seconds if it's set higher than 120 seconds
     if timeout > 120:
@@ -728,7 +733,9 @@ async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
     score = 0
     persons = {}
     # Embed before the game starts, containing the help message
-    await ctx.channel.send(embed=plotster_game_start_embed())
+    start_embed = plotster_game_start_embed()
+    start_embed.description += "\n\n" + ("Solo game: only your guesses count." if solo else "Everyone in this channel can guess.")
+    await ctx.channel.send(embed=start_embed)
     await asyncio.sleep(5) # Time to read the help message
     prefix = await bot.get_prefixx(bot, ctx.message)
 
@@ -737,9 +744,9 @@ async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
         movie_name = movie['name']
         print(movie_name)
         counter = 0
-        time_remaining = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < time_remaining:
-            time_left = time_remaining - asyncio.get_event_loop().time()
+        time_remaining = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < time_remaining:
+            time_left = time_remaining - asyncio.get_running_loop().time()
             embed, embed_pic = plotster_guess_embed(movie, persons,
                                            lives, score, time_left)
 
@@ -751,7 +758,7 @@ async def play_plotster(ctx, bot, mode, starting_year, ending_year, timeout=60):
 
             try:
                 msg = await bot.wait_for('message', 
-                                              check=lambda m: check(ctx, m),
+                                              check=lambda m: not m.author.bot and check(ctx, m, ctx.author.id if solo else None),
                                               timeout=time_left)
             except asyncio.exceptions.TimeoutError:
                 lives -= 1
@@ -822,6 +829,7 @@ def create_game_over_embed(user_id, score) -> discord.Embed:
     img_url = "https://media.discordapp.net/attachments/1092244601525510154/1105039621794058240/TheWhistler_Bollywood_styled_and_in_the_style_of_Scott_C_happy__a51aeaec-5979-447f-98f6-e86a27025d99.png?width=476&height=476"
     description = f"<@{user_id}> won with {score} points."
     embed = discord.Embed(title="GAME OVER!", description=description, color=discord.Color.gold())
+    embed.set_footer(text="Run /play to start another quiz.")
     embed.set_image(url=img_url)
     return embed
 
@@ -856,7 +864,7 @@ def create_instructions_embed(help_mode=False) -> discord.Embed:
     embed.set_image(url=img_url)
     return embed
 
-async def play_quizster(ctx, bot, mode, starting_year, ending_year, timeout=60):
+async def play_quizster(ctx, bot, mode, starting_year, ending_year, timeout=60, solo=False):
     game_type = "quizster"
     timeout = min(timeout, 60)  # Limit the timeout to 60 seconds
 
@@ -866,22 +874,21 @@ async def play_quizster(ctx, bot, mode, starting_year, ending_year, timeout=60):
     lives, skips, hints, rounds = 3, 1, 3, 0
     instructions_embed = create_instructions_embed()
 
-    await ctx.send("React on this to enter.")
-    msg = await ctx.send(embed=instructions_embed)
-    await msg.add_reaction("\U0001F39F")
-
-    time_to_enter = 5
-    time_temp_msg = await ctx.send(discord.utils.format_dt(datetime.datetime.now() + datetime.timedelta(seconds=time_to_enter), style="R"))
-    await asyncio.sleep(time_to_enter)
-    await time_temp_msg.delete()
-
-    msg = await msg.fetch()
-    participants = [user.id async for user in msg.reactions[0].users() if user.id != bot.user.id]
-    solo = len(participants) < 2
+    if solo:
+        await ctx.send("🧠 **Solo Quizster started!** Only your answers count.", embed=instructions_embed)
+        participants = [ctx.author.id]
+        solo_player_id = ctx.author.id
+    else:
+        lobby = GameLobbyView(ctx.author.id, ctx.author.display_name, "Quizster")
+        lobby.message = await ctx.send(embed=instructions_embed, content=lobby.render(), view=lobby)
+        await lobby.wait()
+        if not lobby.started:
+            return
+        participants = lobby.joined_ids
 
     player_data = {user_id: [lives, 0] for user_id in participants}
     
-    while len(participants) > 1 or (solo and player_data.get(ctx.author.id, [0])[0] > 0):
+    while len(participants) > 1 or (solo and player_data.get(solo_player_id, [0])[0] > 0):
         rounds += 1
         movie = bollywood_backend.get_quiz_question()
         view = QuizsterView(movie, timeout=timeout)
@@ -892,14 +899,11 @@ async def play_quizster(ctx, bot, mode, starting_year, ending_year, timeout=60):
 
         question_embed = create_question_embed(movie, rounds)
         question_msg = await ctx.send(embed=question_embed, view=view)
-        timeout_msg = await ctx.send(discord.utils.format_dt(datetime.datetime.now() + datetime.timedelta(seconds=timeout), style="R"))
+        timeout_msg = await ctx.send(discord.utils.format_dt(discord.utils.utcnow() + datetime.timedelta(seconds=timeout), style="R"))
         
         view.response = question_msg
-        try:
-            await asyncio.wait_for(view.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            view.disable_view()
-            await question_msg.edit(content="Timed out!", view=view)
+        await view.wait()
+        if not view.resolved:
             await view.compare_answers()
 
         await timeout_msg.delete()
@@ -915,17 +919,17 @@ async def play_quizster(ctx, bot, mode, starting_year, ending_year, timeout=60):
         hints = view.hints
         people_answered = view.users
 
-        if not participants or len(view.users) == 0:
+        if not participants or (not view.users and not view.skipped):
             await ctx.send("No one gave an answer. The game is over.")
             break
 
         if len(participants) > 1 or solo:
             await ctx.send(embed=discord.Embed(title="Next round begins in 5 seconds."))
             await asyncio.sleep(5)
-        elif solo and player_data[ctx.author.id][0] == 0:
+        elif solo and player_data[solo_player_id][0] == 0:
             break
 
-    winner_id = participants[0] if participants else ctx.author.id if solo and player_data[ctx.author.id][0] > 0 else None
+    winner_id = participants[0] if participants else solo_player_id if solo and player_data[solo_player_id][0] > 0 else None
     if winner_id:
         await ctx.send(embed=create_game_over_embed(winner_id, player_data[winner_id][1]))
     else:

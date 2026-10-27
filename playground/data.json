@@ -1,0 +1,209 @@
+{
+    "1": {
+        "id": 1,
+        "name": "Jungle",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 0,
+                "description": ""
+            },
+            "E": {
+                "id": 2,
+                "description": ""
+            },
+            "S": {
+                "id": 4,
+                "description": ""
+            },
+            "W": {
+                "id": 0,
+                "description": ""
+            }
+        }
+    },
+    "2": {
+        "id": 2,
+        "name": "Jungle",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 0,
+                "description": ""
+            },
+            "E": {
+                "id": 3,
+                "description": ""
+            },
+            "S": {
+                "id": 5,
+                "description": ""
+            },
+            "W": {
+                "id": 1,
+                "description": ""
+            }
+        }
+    },
+    "3": {
+        "id": 3,
+        "name": "Something",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 0,
+                "description": ""
+            },
+            "E": {
+                "id": 0,
+                "description": ""
+            },
+            "S": {
+                "id": 6,
+                "description": ""
+            },
+            "W": {
+                "id": 2,
+                "description": ""
+            }
+        }
+    },
+    "4": {
+        "id": 4,
+        "name": "Neighbor",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 1,
+                "description": ""
+            },
+            "E": {
+                "id": 5,
+                "description": ""
+            },
+            "S": {
+                "id": 7,
+                "description": ""
+            },
+            "W": {
+                "id": 0,
+                "description": ""
+            }
+        }
+    },
+    "5": {
+        "id": 5,
+        "name": "House",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 2,
+                "description": ""
+            },
+            "E": {
+                "id": 6,
+                "description": ""
+            },
+            "S": {
+                "id": 8,
+                "description": ""
+            },
+            "W": {
+                "id": 4,
+                "description": ""
+            }
+        }
+    },
+    "6": {
+        "id": 6,
+        "name": "Palace",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 3,
+                "description": ""
+            },
+            "E": {
+                "id": 0,
+                "description": ""
+            },
+            "S": {
+                "id": 9,
+                "description": ""
+            },
+            "W": {
+                "id": 5,
+                "description": ""
+            }
+        }
+    },
+    "7": {
+        "id": 7,
+        "name": "Neighbor 2",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 4,
+                "description": ""
+            },
+            "E": {
+                "id": 8,
+                "description": ""
+            },
+            "S": {
+                "id": 0,
+                "description": ""
+            },
+            "W": {
+                "id": 0,
+                "description": ""
+            }
+        }
+    },
+    "8": {
+        "id": 8,
+        "name": "Road",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 5,
+                "description": ""
+            },
+            "E": {
+                "id": 9,
+                "description": ""
+            },
+            "S": {
+                "id": 0,
+                "description": ""
+            },
+            "W": {
+                "id": 7,
+                "description": ""
+            }
+        }
+    },
+    "9": {
+        "id": 9,
+        "name": "Parliament",
+        "description": "",
+        "connections": {
+            "N": {
+                "id": 6,
+                "description": ""
+            },
+            "E": {
+                "id": 0,
+                "description": ""
+            },
+            "S": {
+                "id": 0,
+                "description": ""
+            },
+            "W": {
+                "id": 8,
+                "description": ""
+            }
+        }
+    }
+}

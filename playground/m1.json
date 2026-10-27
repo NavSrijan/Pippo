@@ -1,0 +1,34 @@
+{
+  "id": "1",
+  "name": "Ravan",
+  "hp": 100,
+  "level": 1,
+  "atk_pw": 10,
+  "def_pw": 10,
+  "xp": 50,
+  "items_dropped": [
+    2,
+    3,
+    4,
+    5
+  ],
+  "special_abilities": [
+    1,
+    2,
+    3
+  ],
+  "weaknessess": [
+    1,
+    2
+  ],
+  "immunities": [
+    1,
+    2
+  ],
+  "style": "aggressive",
+  "lines": {
+    "about": "Ravan is a demon king.",
+    "atk_line1": "Attack ho gaye tum",
+    "def_line1": "Defend ho gaye hum"
+  }
+}

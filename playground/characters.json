@@ -1,0 +1,68 @@
+{
+    "Apollo": {
+      "class": "Healer",
+      "healthPoints": 100,
+      "attackPower": 20,
+      "defense": 10,
+      "speed": 15,
+      "accuracy": 80,
+      "evasion": 10,
+      "criticalHitRate": 10,
+      "resourcePool": 100
+    },
+    "Freyja": {
+      "class": "Healer",
+      "healthPoints": 80,
+      "attackPower": 15,
+      "defense": 10,
+      "speed": 20,
+      "accuracy": 85,
+      "evasion": 15,
+      "criticalHitRate": 5,
+      "resourcePool": 120
+    },
+    "Athena": {
+      "class": "Tactician",
+      "healthPoints": 90,
+      "attackPower": 18,
+      "defense": 15,
+      "speed": 12,
+      "accuracy": 90,
+      "evasion": 20,
+      "criticalHitRate": 10,
+      "resourcePool": 80
+    },
+    "Odin": {
+      "class": "Tactician",
+      "healthPoints": 110,
+      "attackPower": 25,
+      "defense": 12,
+      "speed": 10,
+      "accuracy": 75,
+      "evasion": 5,
+      "criticalHitRate": 15,
+      "resourcePool": 90
+    },
+    "Hercules": {
+      "class": "Warrior",
+      "healthPoints": 120,
+      "attackPower": 30,
+      "defense": 20,
+      "speed": 8,
+      "accuracy": 70,
+      "evasion": 5,
+      "criticalHitRate": 20,
+      "resourcePool": 80
+    },
+    "Thor": {
+      "class": "Warrior",
+      "healthPoints": 110,
+      "attackPower": 28,
+      "defense": 15,
+      "speed": 12,
+      "accuracy": 75,
+      "evasion": 10,
+      "criticalHitRate": 10,
+      "resourcePool": 90
+    }
+}

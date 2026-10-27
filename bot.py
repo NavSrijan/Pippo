@@ -1,150 +1,123 @@
+"""Pippo's Discord entry point. Run from the repository root."""
+
 import asyncio
-import asyncpg
+import logging
 import os
-import datetime
-import time
 import random
 
+import asyncpg
 import discord
 from discord.ext import commands
-import topgg
-import json
 
+from config import database_options, env, production
 from database import DB
 
-#MY_GUILD = discord.Object(id=864085584691593216)
-cogs = ['greetings', 'bollywood', 'settings', 'help', 'info', 'fun', 'animals', 'actions', 'economy', 'shop']
+log = logging.getLogger(__name__)
+cogs = ['greetings', 'bollywood', 'play', 'settings', 'help', 'info', 'fun', 'animals', 'actions', 'economy', 'shop']
 
 
 async def get_prefix(bot, message):
-    """Returns the specific guild prefix"""
     if message.guild is None:
         return "."
     try:
-        prefix = await bot.db.servers.fetch_prefix(message.guild.id)
-        return prefix or "."
+        return await bot.db.servers.fetch_prefix(message.guild.id) or "."
     except Exception:
+        log.warning("Could not read guild prefix; using default")
         return "."
 
-intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True
-activity = discord.Activity(type=discord.ActivityType.listening, name=f"Maithili Thakur")
-prefix = "."
-bot = commands.Bot(command_prefix=get_prefix,
-                   case_insensitive=True,
-                   intents=intents,
-                   status=discord.Status.online,
-                   activity=activity,
-                   help_command=None)
 
-bot.prefix = prefix
-bot.get_prefixx = get_prefix
-bot.production = str(os.environ.get('production', 'False')).lower() in ('true', '1')
+async def load_cogs(bot, extensions):
+    for extension in extensions:
+        # Fail startup rather than syncing a partially loaded command tree.
+        await bot.load_extension('cogs.' + extension)
+        log.info("Loaded %s", extension)
 
-bot.THEWHISTLER = 302253506947973130
 
-async def load_cogs(bot, cogs):
-    for extension in cogs:
+class PippoBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.members = True
+        intents.message_content = True
+        super().__init__(
+            command_prefix=get_prefix,
+            case_insensitive=True,
+            intents=intents,
+            activity=discord.Activity(type=discord.ActivityType.listening, name="Maithili Thakur"),
+            help_command=None,
+            allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, replied_user=False),
+        )
+        self.prefix = "."
+        self.get_prefixx = get_prefix
+        self.production = production()
+        self.THEWHISTLER = int(env("BOT_OWNER_ID", default="302253506947973130"))
+        self.pool = None
+        self.topggpy = None
+        self.pfp_url = ""
+
+    async def setup_hook(self):
+        self.pool = await asyncpg.create_pool(**database_options())
+        self.db = DB(self.pool)
+        await load_cogs(self, cogs)
+        await self.tree.sync()
+        self.pfp_url = self.user.display_avatar.url if self.user else ""
+        topgg_token = env("TOPGG_TOKEN", "topgg")
+        if self.production and topgg_token:
+            import topgg
+            self.topggpy = topgg.DBLClient(self, topgg_token, autopost=True, post_shard_count=False)
+
+    async def close(self):
         try:
-            await bot.load_extension('cogs.' + extension)
-            print(f"Loaded {extension}")
-        except Exception as e:
-            print(f"Error loading {extension}")
-            print(e)
+            if self.topggpy is not None:
+                await self.topggpy.close()
+                self.topggpy = None
+        finally:
+            try:
+                await super().close()
+            finally:
+                if self.pool is not None:
+                    await self.pool.close()
+                    self.pool = None
+
+
+bot = PippoBot()
+
+
+@bot.before_invoke
+async def acknowledge_slash_command(ctx):
+    # Suggestion without text must open a modal as its first response.
+    if ctx.interaction and ctx.command.name != "suggest":
+        await ctx.defer()
 
 
 @bot.event
 async def on_ready():
-    print("Logged in as {0.user}".format(bot))
-    THEWHISTLER = bot.THEWHISTLER
-    try:
-        thewhistler = bot.get_user(THEWHISTLER) or await bot.fetch_user(THEWHISTLER)
-        if thewhistler:
-            await thewhistler.send("Pippo Online")
-    except Exception as e:
-        print(f"Could not notify owner on ready: {e}")
+    log.info("Logged in as %s", bot.user)
 
-    def generate_command_list():
-        # Generating a command list
-        def get_command_info(command):
-            return {
-                'name': command.name,
-                'aliases': command.aliases,
-                'help': command.help,
-                'coins': 0,
-            }
-
-        commands_info = []
-        for command in bot.commands:
-            command_info = get_command_info(command)
-            commands_info.append(command_info)
-
-        with open('commands.json', 'w') as file:
-            json.dump(commands_info, file, indent=4)
-
-creds = {
-    'username': os.environ.get('database_username', ''),
-    'password': os.environ.get('database_password', ''),
-    'host': os.environ.get('db_host', '')
-}
-async def create_db_pool():
-    #Remove max_size=1
-    try:
-        bot.pool = await asyncpg.create_pool(database="pippobot_db", user=creds['username'], password=creds['password'], host=creds['host'], max_size=1, min_size=1)
-    except Exception as e:
-        print(f"Database connection error: {e}")
-        bot.pool = None
-
-
-async def store_command(message):
-    ctx = await bot.get_context(message)
-    if ctx.invoked_with and ctx.command and getattr(bot, 'db', None):
-        anal = bot.db.analytics
-        guild_id = ctx.message.guild.id if ctx.message.guild else None
-        await anal.insert_command(ctx.command.name, guild_id, ctx.message.author.id) 
-        await bot.db.coins.add_coins(ctx.author.id, command_name=ctx.command.name)
-        reward = bot.db.coins.commands_dict.get(ctx.command.name, {}).get('coins', 0)
-        if random.random() < 0.30 and reward != 0:
-            await ctx.reply(f"You can get coins upon using commands now!\nYou got **{reward}** coins.")
 
 @bot.event
-async def on_message(message: discord.Message):
-    if message.author == bot.user or message.author.bot:
+async def on_command_completion(ctx):
+    """Reward successful commands consistently for prefix, slash, and menu calls."""
+    if not getattr(bot, "db", None):
         return
     try:
-        await store_command(message)
-    except:
-        pass
-    await bot.process_commands(message)
-
-
-@bot.event
-async def on_interaction(interaction: discord.Interaction):
-    if interaction.type == discord.InteractionType.application_command and interaction.data and 'name' in interaction.data:
-        guild_id = interaction.guild.id if interaction.guild else None
-        try:
-            if getattr(bot, 'db', None):
-                await bot.db.analytics.insert_command(interaction.data['name'], guild_id, interaction.user.id)
-        except Exception:
-            pass
-
-@bot.event
-async def setup_hook():
-    await create_db_pool()
-    if bot.pool:
-        bot.db = DB(bot.pool)
-    await load_cogs(bot, cogs)
-    await bot.tree.sync()
-    bot.pfp_url = bot.user.display_avatar.url if bot.user else ""
-    if bot.production is True and 'topgg' in os.environ: 
-        bot.topggpy = topgg.DBLClient(bot, os.environ['topgg'], autopost=True, post_shard_count=False)
+        guild_id = ctx.guild.id if ctx.guild else None
+        await bot.db.analytics.insert_command(ctx.command.qualified_name, guild_id, ctx.author.id)
+        await bot.db.coins.add_coins(ctx.author.id, command_name=ctx.command.name)
+        reward = bot.db.coins.commands_dict.get(ctx.command.name, {}).get('coins', 0)
+        if reward and random.random() < 0.30:
+            await ctx.send(f"You earned **{reward}** coins.")
+    except Exception:
+        log.exception("Could not record completed command")
 
 
 async def main():
+    token = env("DISCORD_TOKEN", "tc_token")
+    if not token:
+        raise RuntimeError("Set DISCORD_TOKEN (or the legacy tc_token) before starting Pippo")
     async with bot:
-        await bot.start(os.environ["tc_token"])
+        await bot.start(token)
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     asyncio.run(main())

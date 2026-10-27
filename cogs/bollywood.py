@@ -9,12 +9,13 @@ import os
 import aiohttp
 
 import discord
+from flood import Flood
 from discord.ext import commands
-from fuzzywuzzy import fuzz
+from utils.clash import judge_clash
 from io import BytesIO
 
 
-from views import PlotsterView, QuizsterView, BingoStartView, TicTacToeView, MemoryView, FloodView, GuessTheMovieView
+from views import PlotsterView, QuizsterView, BingoStartView, TicTacToeView, MemoryView, FloodView, GuessTheMovieView, ChallengeInviteView, GameLobbyView
 from utils.bollywood_utils import play_game, play_pixelate, play_plotster, play_quizster
 
 """
@@ -35,13 +36,15 @@ Flags
 class PosterFlags(commands.FlagConverter):
     mode: Poster_choice = commands.flag(default=Poster_choice.get_default(), description='Mode of the poster guessing')
     starting_year: int = commands.flag(default=2010, description='The starting year')
-    ending_year: int = commands.flag(default=2023, description='The ending year')
+    ending_year: int = commands.flag(default=discord.utils.utcnow().year, description='The ending year')
     timeout: int = commands.flag(default=15, description='The timeout period in seconds')
+    solo: bool = commands.flag(default=False, description='Play alone; only your guesses count')
 
 class BollywoodFlags(commands.FlagConverter):
     starting_year: int = commands.flag(default=2010, description='The starting year')
-    ending_year: int = commands.flag(default=2023, description='The ending year')
+    ending_year: int = commands.flag(default=discord.utils.utcnow().year, description='The ending year')
     timeout: int = commands.flag(default=15, description='The timeout period in seconds')
+    solo: bool = commands.flag(default=False, description='Play alone; only your guesses count')
 
 class Games(commands.Cog):
     """Games"""
@@ -53,38 +56,38 @@ class Games(commands.Cog):
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="bollywood")
     async def bollywood_game(self, ctx, *, flags: BollywoodFlags):
-        """A Hangman like game but for bollywood movies!"""
-        await play_game(ctx, self.bot, "bollywood", flags.starting_year, flags.ending_year, ["data/bollywood/"], flags.timeout)
+        """Guess Bollywood movies with friends, or use solo: True to play alone."""
+        await play_game(ctx, self.bot, "bollywood", flags.starting_year, flags.ending_year, ["data/bollywood/"], flags.timeout, solo=flags.solo)
     
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="hollywood")
     async def hollywood_game(self, ctx, *, flags: BollywoodFlags):
-        """A Hangman like game but for hollywood movies!"""
-        await play_game(ctx, self.bot, "hollywood", flags.starting_year, flags.ending_year, ["data/hollywood/"], flags.timeout)
+        """Guess Hollywood movies with friends, or use solo: True to play alone."""
+        await play_game(ctx, self.bot, "hollywood", flags.starting_year, flags.ending_year, ["data/hollywood/"], flags.timeout, solo=flags.solo)
 
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="plotster")
     async def plotster(self, ctx, *, flags: PosterFlags):
-        """Plotster game function"""
-        await play_plotster(ctx, self.bot, flags.mode.value, flags.starting_year, flags.ending_year, timeout=flags.timeout)
+        """Play Plotster with friends, or use solo: True to play alone."""
+        await play_plotster(ctx, self.bot, flags.mode.value, flags.starting_year, flags.ending_year, timeout=flags.timeout, solo=flags.solo)
 
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="quizster")
     async def quizster(self, ctx, *, flags: PosterFlags):
-        """Quiz based on bollywood movies"""
-        await play_quizster(ctx, self.bot, flags.mode.value, flags.starting_year, flags.ending_year, timeout=flags.timeout)
+        """Play the Bollywood quiz with friends, or use solo: True to play alone."""
+        await play_quizster(ctx, self.bot, flags.mode.value, flags.starting_year, flags.ending_year, timeout=flags.timeout, solo=flags.solo)
 
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="poster", aliases=["poster_guess", "depixelate", "pixelate"])
     #async def poster_guess(self, ctx, mode: Poster_choice = Poster_choice.get_default(), starting_year=2010, ending_year=2023, timeout=15):
     async def poster_guess(self, ctx, *, flags: PosterFlags):
-        """Guess the movie from its poster!"""
-        await play_pixelate(ctx, self.bot, flags.mode.value, flags.starting_year, flags.ending_year, timeout=flags.timeout)
+        """Guess movie posters with friends, or use solo: True to play alone."""
+        await play_pixelate(ctx, self.bot, flags.mode.value, flags.starting_year, flags.ending_year, timeout=flags.timeout, solo=flags.solo)
 
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="bingo")
-    async def bingo(self, ctx, time_to_enter:int=15):
-        """Bingo!"""
+    async def bingo(self, ctx, solo: bool = False):
+        """Play Bingo with friends, or set solo to play against Pippo."""
 
         # Functions
 
@@ -109,70 +112,127 @@ class Games(commands.Cog):
             desc = """
             Remember the game of bingo we used to play in classrooms? No? 
 
-            There is a 5x5 matrix and you need to fill at least 5 lines, either horizontall, vertically or diagonally.
-            The first person to do so, wins.
-
-            Select a number when it's your turn.
+            Complete five lines across, down, or diagonally to win.
+            Use the Join and Start buttons in the lobby. Once the game begins, each player selects Get my board.
+            Select a number only on your turn. In solo mode, Pippo takes its turn automatically.
             """
             emb = discord.Embed(title="Bingo!", description=desc)
             return emb
 
-        # Variables
-        time_to_enter = min(time_to_enter, 60)
-
-        # Taking players entry
         await ctx.send(embed=instructions_embed())
-        await ctx.send("React on this to enter.")
-        msg = await ctx.send(embed=discord.Embed(title="BINGO!"))
-        await msg.add_reaction("\U0001F39F")
-        time_temp_msg = await ctx.send(discord.utils.format_dt(datetime.datetime.now()+datetime.timedelta(seconds=time_to_enter), style="R"))
-        await asyncio.sleep(time_to_enter)
-        await time_temp_msg.delete()
-        msg = await msg.fetch()
-        people = []
-        if msg.reactions:
-            rec = msg.reactions[0]
-            people = [user.id async for user in rec.users()]
-        if self.bot.user and self.bot.user.id in people:
-            people.remove(self.bot.user.id)
-        if not people:
-            await ctx.send("No players joined the game in time! Bingo canceled.")
-            return
+        bot_joined_id = None
+        if solo:
+            people = [ctx.author.id]
+            bot_user = self.bot.user
+            bot_joined_id = bot_user.id
+            people.append(bot_joined_id)
+            await ctx.send("🤖 **Solo Mode!** Pippo has joined the Bingo match as your opponent.")
+        else:
+            lobby = GameLobbyView(ctx.author.id, ctx.author.display_name, "Bingo")
+            lobby.message = await ctx.send(lobby.render(), view=lobby)
+            await lobby.wait()
+            if not lobby.started:
+                return
+            people = lobby.joined_ids
+
         players = {}
         for i in people:
             players[i] = Player(i)
 
-        view = BingoStartView(players)
+        view = BingoStartView(players, bot_user_id=bot_joined_id)
         msg = await ctx.send(view=view)
         view.out = msg
 
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name="tictactoe")
-    async def tictactoe(self, ctx):
-        """TIC TAC TOE"""
-        await ctx.send('Tic Tac Toe: X goes first', view=TicTacToeView())
+    async def tictactoe(self, ctx, opponent: discord.Member = None):
+        """Play a game of Tic Tac Toe (Solo vs Bot or vs a Friend)"""
+        if opponent:
+            if opponent.id == ctx.author.id or opponent.bot:
+                view = TicTacToeView(player_x=ctx.author, vs_bot=True)
+                msg = await ctx.send(f"🎮 **Tic Tac Toe (Solo vs Pippo 🤖)**!\n{ctx.author.mention} (X) v/s Pippo (O)\nIt is your turn (X)!", view=view)
+                view.message = msg
+                return
+
+            invite_view = ChallengeInviteView(ctx.author, opponent, "Tic Tac Toe")
+            invite_msg = await ctx.send(f"⚔️ {opponent.mention}, **{ctx.author.display_name}** has challenged you to a game of **Tic Tac Toe**!", view=invite_view)
+            invite_view.message = invite_msg
+            await invite_view.wait()
+
+            if invite_view.accepted is not True:
+                return
+
+            view = TicTacToeView(player_x=ctx.author, player_o=opponent)
+            msg = await ctx.send(f"🎮 **Tic Tac Toe**: {ctx.author.mention} (X) v/s {opponent.mention} (O)\nIt is now {ctx.author.mention}'s turn (X)!", view=view)
+            view.message = msg
+        else:
+            view = TicTacToeView(player_x=ctx.author, vs_bot=True)
+            msg = await ctx.send(f"🎮 **Tic Tac Toe (Solo vs Pippo 🤖)**!\n{ctx.author.mention} (X) v/s Pippo (O)\nIt is your turn (X)!", view=view)
+            view.message = msg
 
     @commands.hybrid_command(name="memory")
-    async def memorygame(self, ctx, user2: discord.Member):
-        """Challenge a friend to a game of memory"""
-        user1 = ctx.author     
-        view = MemoryView(user1, user2)
-        out  = await ctx.reply(f"{user1.mention}'s turn.'", view=view)
+    async def memorygame(self, ctx, opponent: discord.Member = None):
+        """Play Memory Match (Solo Challenge or 1v1 vs a Friend)"""
+        if opponent is None or opponent.bot or opponent.id == ctx.author.id:
+            view = MemoryView(ctx.author)
+            out = await ctx.reply("🃏 **Solo Memory Challenge Started!**\nFlip two cards at a time to find all 8 matching pairs in the fewest moves.", view=view)
+            view.out = out
+            return
+
+        invite_view = ChallengeInviteView(ctx.author, opponent, "Memory Match")
+        invite_msg = await ctx.send(f"🃏 {opponent.mention}, **{ctx.author.display_name}** has challenged you to a game of **Memory Match**!", view=invite_view)
+        invite_view.message = invite_msg
+        await invite_view.wait()
+
+        if invite_view.accepted is not True:
+            return
+
+        view = MemoryView(ctx.author, opponent)
+        out = await ctx.reply(f"🎮 Game started! {ctx.author.mention}'s turn.", view=view)
         view.out = out
 
     @commands.hybrid_command(name="flood")
-    async def flood(self, ctx):
-        """Challenge a friend to a game of flood"""
+    async def flood(self, ctx, solo: bool = False):
+        """Play Flood with friends, or set solo to challenge Pippo."""
+        color_emojis = {
+            "red": 1133798766802129086,
+            "green": 1133798762339373077,
+            "magenta": 1133798753690730576,
+            "blue": 1133798757817917670,
+            "yellow": 1133798749248958495,
+            "top_left": 1134477415192727563,
+            "bottom_right": 1134477412487417997,
+            "discord_loading": 1134482068391333898
+        }
+        unicode_emojis = {
+            "red": "🟥",
+            "green": "🟩",
+            "magenta": "🟪",
+            "blue": "🟦",
+            "yellow": "🟨",
+            "top_left": "↖️",
+            "bottom_right": "↘️",
+            "discord_loading": "⏳"
+        }
         emojis = {}
-        color_emojis = {"red":1133798766802129086, "green": 1133798762339373077, "magenta": 1133798753690730576, "blue": 1133798757817917670, "yellow": 1133798749248958495, "top_left":1134477415192727563, "bottom_right":1134477412487417997, "discord_loading": 1134482068391333898}
-        for i in color_emojis:
-            emojis[i] = self.bot.get_emoji(color_emojis[i])
+        for k, v in color_emojis.items():
+            emojis[k] = self.bot.get_emoji(v) or unicode_emojis[k]
 
         user1 = ctx.author     
         view = FloodView(user1, emojis)
-        emb = discord.Embed(title="Flood!", description=f"Looking for someone to accept! {emojis['discord_loading']}")
-        emb.set_image(url="https://i.imgur.com/XgGA46z.png")
-        out  = await ctx.reply(embed=emb, view=view)
+        if solo:
+            view.players.append(self.bot.user)
+            view.vs_bot = True
+            view.bot = self.bot
+            view.flood = Flood(view.players)
+            view.clear_items()
+            view.populate_buttons()
+            emb = view.return_embed()
+            out = await ctx.reply(embed=emb, view=view, file=view.flood.return_image())
+        else:
+            emb = discord.Embed(title="Flood!", description=f"Choose **Play vs Pippo** for solo play, or wait for a friend to accept. {emojis['discord_loading']}")
+            emb.set_image(url="https://i.imgur.com/XgGA46z.png")
+            out = await ctx.reply(embed=emb, view=view)
         view.out = out
         view.bot = self.bot
 
@@ -183,20 +243,42 @@ class Games(commands.Cog):
 
     @commands.hybrid_command(name="clash")
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
-    async def ai_clash(self, ctx):
-        "Fight with your opponent using any object, character, or anything."
+    async def ai_clash(self, ctx, solo: bool = False):
+        "Fight a friend or challenge Pippo with any object, character, or concept. Set solo to play Pippo."
         
         # Create UI components for the clash game
         class ClashSubmitView(discord.ui.View):
-            def __init__(self, timeout=120):
+            def __init__(self, timeout=120, solo=False):
                 super().__init__(timeout=timeout)
                 self.submissions = {}
                 self.message = None
+                self.solo = solo
+                self.owner_id = ctx.author.id if solo else None
+
+            async def interaction_check(self, interaction: discord.Interaction) -> bool:
+                if self.solo and self.owner_id is not None and interaction.user.id != self.owner_id:
+                    await interaction.response.send_message("This is someone else's solo duel.", ephemeral=True)
+                    return False
+                return True
+
+            async def on_timeout(self):
+                for item in self.children:
+                    item.disabled = True
+                if self.message:
+                    try:
+                        status = "Lobby expired without a creation." if not self.submissions else "Lobby expired. The submitted creation will face Pippo."
+                        await self.message.edit(content=f"⏱️ {status}", view=self)
+                    except Exception:
+                        pass
             
             @discord.ui.button(label="Submit Creation", style=discord.ButtonStyle.primary)
             async def submit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                # Create a modal for user submission
-                modal = ClashSubmitModal(self)
+                modal = ClashSubmitModal(self, solo=self.solo)
+                await interaction.response.send_modal(modal)
+
+            @discord.ui.button(label="Duel Pippo 🤖", style=discord.ButtonStyle.secondary)
+            async def duel_bot_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                modal = ClashSubmitModal(self, solo=True)
                 await interaction.response.send_modal(modal)
                 
         class ClashSubmitModal(discord.ui.Modal, title="Submit Your Creation"):
@@ -207,130 +289,53 @@ class Games(commands.Cog):
                 max_length=100
             )
             
-            def __init__(self, view):
+            def __init__(self, view, solo=False):
                 super().__init__()
                 self.view = view
+                self.solo = solo
             
             async def on_submit(self, interaction: discord.Interaction):
                 user_id = interaction.user.id
+                if self.view.is_finished() or (self.view.solo and user_id != self.view.owner_id):
+                    await interaction.response.send_message("This duel is already closed.", ephemeral=True)
+                    return
                 self.view.submissions[user_id] = self.creation.value
                 
-                # Acknowledge the submission
                 await interaction.response.send_message(f"Your creation '{self.creation.value}' has been submitted!", ephemeral=True)
                 
+                if self.solo:
+                    self.view.solo = True
+                    self.view.owner_id = user_id
+                    self.view.stop()
+                    for item in self.view.children:
+                        item.disabled = True
+                    if self.view.message:
+                        await self.view.message.edit(content="✅ Creation submitted. Pippo is entering the arena…", view=self.view)
+                    return
+
                 # Update the main message
                 participants = []
                 for uid in self.view.submissions:
                     user = interaction.client.get_user(uid)
-                    participants.append(f"✅ @{user.display_name}")
+                    participants.append(f"✅ @{user.display_name if user else 'Player'}")
                 
-                # Update the embed with current submissions
                 embed = discord.Embed(
                     title="Clash of Creations",
                     description=f"Submissions received:\n" + "\n".join(participants) + "\n\nThink of an object or concept you want to fight with.",
                     color=discord.Color.green()
                 )
-                await self.view.message.edit(embed=embed)
+                try:
+                    await self.view.message.edit(embed=embed)
+                except Exception:
+                    pass
                 
-                # If we have 2 submissions, proceed with the clash after a short delay
                 if len(self.view.submissions) >= 2:
-                    await asyncio.sleep(2)  # Give a moment for users to see the final submission state
+                    await asyncio.sleep(2)
                     self.view.stop()
-        
-        # AI judging function using Google's Gemini API
-        async def judge_clash(player1, player1_creation, player2, player2_creation):
-            """Use Gemini API to judge clash submissions asynchronously"""
-            try:
-                # Get API key from environment variable
-                api_key = os.environ.get('gemini_api_key', '')
-                if not api_key:
-                    raise ValueError("gemini_api_key environment variable not set")
-                
-                # Create the prompt for the battle
-                prompt = f"""
-                In an epic battle between two creations:
-                - Player 1 ({player1.display_name}) is using: {player1_creation}
-                - Player 2 ({player2.display_name}) is using: {player2_creation}
-                
-                Decide who would win this battle and why in a creative, entertaining way. It shouldn't prioritize superficial things. Make it quirky, fun, unexpectable. Don't go with emotions, go with absurdity. Don't make it too long, max 3 lines. no line 
-                breaks.
-                Respond in this exact format:
-                WINNER: [Player 1 or Player 2]
-                REASON: [A creative, detailed explanation of why this creation won]
-                """
-                
-                # API endpoint for Gemini
-                url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-                
-                # Request payload
-                payload = {
-                    "contents": [{
-                        "parts": [{
-                            "text": prompt
-                        }]
-                    }],
-                    "generationConfig": {
-                        "temperature": 0.9,
-                        "topP": 1,
-                        "topK": 32,
-                        "maxOutputTokens": 250
-                    }
-                }
-                
-                headers = {
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": api_key
-                }
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
-                    async with session.post(url, headers=headers, json=payload) as response:
-                        if response.status != 200:
-                            raise RuntimeError(f"Gemini API returned status {response.status}")
-                        response_data = await response.json()
-                
-                # Extract text safely
-                candidates = response_data.get("candidates", [])
-                if not candidates:
-                    raise RuntimeError("No candidates returned from Gemini API")
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if not parts:
-                    raise RuntimeError("No text parts in Gemini candidate")
-                
-                response_text = parts[0].get("text", "")
-                if "WINNER: Player 1" in response_text:
-                    winner = player1
-                elif "WINNER: Player 2" in response_text:
-                    winner = player2
-                else:
-                    winner = player1 if "player 1" in response_text.lower() else player2
-                
-                # Extract the reason
-                reason_match = re.search(r"REASON: (.*?)(?=$|\n\n)", response_text, re.DOTALL)
-                if reason_match:
-                    reason = reason_match.group(1).strip()
-                else:
-                    reason = response_text.split("REASON:")[-1].strip() if "REASON:" in response_text else response_text
-                
-                return winner, reason
-                
-            except Exception as e:
-                print(f"Error using Gemini API: {str(e)}")
-                
-                # Fallback to random choice if the API fails
-                winner = random.choice([player1, player2])
-                loser = player2 if winner == player1 else player1
-                winner_creation = player1_creation if winner == player1 else player2_creation
-                loser_creation = player2_creation if winner == player1 else player1_creation
-                
-                # Generate a fallback creative reason
-                reasons = [
-                    f"{winner_creation} absorbs the secret, making it deliciously illegible. Plus, who can resist warm, buttery carbs?",
-                    f"{winner_creation} overwhelms {loser_creation} with its superior capabilities and strategic advantage.",
-                    f"The sheer power of {winner_creation} is too much for {loser_creation} to handle in direct combat.",
-                    f"{winner_creation} uses an unexpected technique that {loser_creation} simply cannot counter."
-                ]
-                
-                reason = f"[API Fallback] {random.choice(reasons)}"
-                return winner, reason
+                    for item in self.view.children:
+                        item.disabled = True
+                    if self.view.message:
+                        await self.view.message.edit(content="✅ Both creations are in. The duel is starting…", view=self.view)
         
         # Execute clash
         try:
@@ -339,36 +344,56 @@ class Games(commands.Cog):
                 title="Welcome to Clash of Creations! ⚔️", 
                 description=(
                     "**How to Play:**\n"
-                    "1. This is a **creative duel** between two players!\n"
+                    "1. This is a **creative duel** between two players or against **Pippo 🤖**!\n"
                     "2. **Submit any object, concept, or person** you want to fight with\n"
                     "3. An **AI judge** 🤖 will determine the winner\n\n"
-                    "⏱️ **You have two minutes to submit your creation**\n"
-                    "Players who don't submit in time will forfeit the match\n\n"
-                    "Ready to duel? Click 'Submit Creation' to begin!"
+                    "⏱️ **You have two minutes to submit your creation**\n\n"
+                    "Click **'Submit Creation'** to duel another player, or **'Duel Pippo 🤖'** for an instant solo battle!"
                 ),
                 color=discord.Color.gold()
             )
             
             # Create and send the view with the submit button
-            view = ClashSubmitView()
+            view = ClashSubmitView(solo=solo)
             view.message = await ctx.send(embed=welcome_embed, view=view)
             
             # Wait for submissions (timeout handled by the view)
             timed_out = await view.wait()
             
             # If timed out or not enough participants
-            if timed_out or len(view.submissions) < 2:
-                await ctx.send("Not enough players submitted their creations in time. The clash has been canceled.")
+            if len(view.submissions) == 0:
+                await ctx.send("No creations submitted in time. The clash has been canceled.")
                 return
             
-            # Get the first two players who submitted
-            player_ids = list(view.submissions.keys())[:2]
-            p1 = ctx.guild.get_member(player_ids[0]) if ctx.guild else None
-            p2 = ctx.guild.get_member(player_ids[1]) if ctx.guild else None
-            player1 = p1 or await self.bot.fetch_user(player_ids[0])
-            player2 = p2 or await self.bot.fetch_user(player_ids[1])
-            player1_creation = view.submissions[player_ids[0]]
-            player2_creation = view.submissions[player_ids[1]]
+            if len(view.submissions) == 1 or view.solo:
+                player_id = view.owner_id if view.solo else next(iter(view.submissions))
+                p1 = ctx.guild.get_member(player_id) if ctx.guild else None
+                player1 = p1 or await self.bot.fetch_user(player_id)
+                player1_creation = view.submissions[player_id]
+                player2 = self.bot.user
+                bot_creations = [
+                    "A sentient samosa armed with laser-guided mint chutney",
+                    "A rogue pressure cooker whistling in hypersonic frequencies",
+                    "An infinite loop of dramatic Bollywood thunderclaps and violin screeches",
+                    "A flying autorickshaw with unyielding meter rates",
+                    "A grandmother wielding an indestructible flying chappal",
+                    "A hyper-caffeinated Bollywood background dancer that multiplies upon impact",
+                    "A runaway Mumbai local train during peak rush hour",
+                    "A cup of cutting chai heated to nuclear core temperatures",
+                    "A Bollywood hero who catches bullets with his teeth while sliding under a horse",
+                    "An uncle giving unsolicited career advice with 100,000 decibels of conviction"
+                ]
+                player2_creation = random.choice(bot_creations)
+                await ctx.send(f"🤖 **Solo Duel!** Pippo enters the arena wielding: **{player2_creation}**!")
+            else:
+                # Get the first two players who submitted
+                player_ids = list(view.submissions.keys())[:2]
+                p1 = ctx.guild.get_member(player_ids[0]) if ctx.guild else None
+                p2 = ctx.guild.get_member(player_ids[1]) if ctx.guild else None
+                player1 = p1 or await self.bot.fetch_user(player_ids[0])
+                player2 = p2 or await self.bot.fetch_user(player_ids[1])
+                player1_creation = view.submissions[player_ids[0]]
+                player2_creation = view.submissions[player_ids[1]]
             
             # Arena announcement
             arena_embed = discord.Embed(
@@ -391,7 +416,7 @@ class Games(commands.Cog):
                 description=f"{winner.display_name} with {player1_creation if winner == player1 else player2_creation}",
                 color=discord.Color.gold()
             )
-            result_embed.add_field(name="Reason", value=reason, inline=False)
+            result_embed.add_field(name="Reason", value=reason[:1024], inline=False)
             # You can add a victory image here if you have one
             
             await ctx.send(embed=result_embed)
@@ -401,28 +426,6 @@ class Games(commands.Cog):
         
         except Exception as e:
             await ctx.send(f"An error occurred during the clash: {str(e)}")
-
-    @memorygame.error
-    async def memorygame_error(self, ctx, error):
-        if isinstance(error, commands.MissingRequiredArgument):
-            prefixx = ctx.prefix
-            await ctx.reply(f"You need to mention a user to challenge! Usage: `{prefixx}memory @user`")
-        else:
-            await ctx.reply("An error occurred. Please try again later.")
-            raise error  # Re-raise the error so that it's still logged by the bot
-
-
-    async def cog_command_error(self, ctx, error):
-        if isinstance(error, commands.MaxConcurrencyReached):
-            await ctx.send("An instance is already running.")
-        elif isinstance(error, commands.CommandOnCooldown):
-            em = discord.Embed(
-                title="Tham ja bhai!",
-                description=f"Try again in {error.retry_after:.2f}s.",
-                color=discord.Color.fuchsia())
-            await ctx.send(embed=em)
-        else:
-            print(repr(error))
 
 
 async def setup(bot):

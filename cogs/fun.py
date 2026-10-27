@@ -3,7 +3,6 @@ import datetime
 import time
 import random
 import re
-import requests
 import json
 import asyncio
 import csv
@@ -35,19 +34,11 @@ class Fun(commands.Cog):
                                    user2,
                                    heart=True) -> discord.File:
         # Get the avatar images of both users
-        try:
-            bytes1 = await user1.display_avatar.read()
-            image1 = Image.open(BytesIO(bytes1)).convert('RGBA')
-        except Exception:
-            resp1 = requests.get(user1.display_avatar.url, stream=True, timeout=10)
-            image1 = Image.open(resp1.raw).convert('RGBA')
-
-        try:
-            bytes2 = await user2.display_avatar.read()
-            image2 = Image.open(BytesIO(bytes2)).convert('RGBA')
-        except Exception:
-            resp2 = requests.get(user2.display_avatar.url, stream=True, timeout=10)
-            image2 = Image.open(resp2.raw).convert('RGBA')
+        bytes1, bytes2 = await asyncio.gather(
+            user1.display_avatar.read(), user2.display_avatar.read()
+        )
+        image1 = Image.open(BytesIO(bytes1)).convert('RGBA')
+        image2 = Image.open(BytesIO(bytes2)).convert('RGBA')
 
         if heart:
             heart_path = "imgs/heart.webp"
@@ -175,10 +166,11 @@ class Fun(commands.Cog):
 
     @commands.hybrid_command(name="laser")
     async def laser(self, ctx, user: discord.Member = None):
-        mo = "<:modiji:1011452564195246120>"
-        las = "<:l1:1011452560147746939>"
-        mol = "<:m1:1011452558444871731>"
-        explode = "<a:explode:1011458958046793740>"
+        """Laser strike animation against a mentioned user"""
+        mo = str(self.bot.get_emoji(1011452564195246120) or "🛰️")
+        las = str(self.bot.get_emoji(1011452560147746939) or "🔴")
+        mol = str(self.bot.get_emoji(1011452558444871731) or "⚡")
+        explode = str(self.bot.get_emoji(1011458958046793740) or "💥")
 
         if user is None:
             user = ctx.author
@@ -215,8 +207,7 @@ class Fun(commands.Cog):
             self.bot.cartoon_characters = load_csv("data/cartoons/character_dataset.csv")
 
         def generate_random_number(user_id, n):
-            random.seed(user_id)
-            return random.randint(0, n)
+            return random.Random(user_id).randint(0, n)
 
         def fetch_value(characters, character_name):
             for character in characters:
@@ -256,21 +247,33 @@ class Fun(commands.Cog):
         ]
         await ctx.reply(f"🎱 **{random.choice(responses)}**")
 
-    @commands.hybrid_command(name="onewordstory") 
-    async def onewordstory(self, ctx):
-        """Make stories with your friends by writing one word each."""
+    @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
+    @commands.hybrid_command(name="onewordstory")
+    async def onewordstory(self, ctx, solo: bool = False):
+        """Make a collaborative one-word story, or set solo to write by yourself."""
+        prefix = await self.bot.get_prefixx(self.bot, ctx.message)
+
         def instruction_embed():
-            emb = discord.Embed(title="One Word Story", description="Send one word at a time in this channel to build a story!\nType `{prefix}end` when you are done.", color=discord.Color.blue())
+            mode = "Only your words will be added." if solo else "Everyone in the channel can contribute."
+            emb = discord.Embed(
+                title="One Word Story",
+                description=f"{mode}\nSend one word at a time. Type `{prefix}end` to finish.",
+                color=discord.Color.blue(),
+            )
             return emb
 
         def check(message):
-            return message.channel == ctx.channel and not message.author.bot and len(message.content.strip().split()) == 1
+            return (
+                message.channel == ctx.channel
+                and not message.author.bot
+                and (not solo or message.author.id == ctx.author.id)
+                and len(message.content.strip().split()) == 1
+            )
 
         await ctx.reply(embed=instruction_embed())
 
         timeout = 60
         para = ""
-        prefix = getattr(self.bot, 'prefix', '.')
 
         while True:
             try:
@@ -371,7 +374,7 @@ class Fun(commands.Cog):
         """
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
-                async with session.get(f"http://api.urbandictionary.com/v0/define?term={query}") as resp:
+                async with session.get(f"https://api.urbandictionary.com/v0/define?term={query}") as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         res = data.get('list', [])
@@ -399,4 +402,3 @@ class Fun(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Fun(bot))
-

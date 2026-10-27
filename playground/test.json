@@ -1,0 +1,96 @@
+{
+  "nodes": [
+    {
+      "id": 1,
+      "name": "Room A",
+      "description": "This is Room A.",
+      "connections": {
+        "N": {
+          "id": 0,
+          "description": "description"
+        },
+        "E": {
+          "id": 2,
+          "description": "This path leads to Room B."
+        },
+        "S": {
+          "id": 0,
+          "description": "description"
+        },
+        "W": {
+          "id": 0,
+          "description": "description"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Room B",
+      "description": "This is Room B",
+      "connections": {
+        "N": {
+          "id": 3,
+          "description": "description"
+        },
+        "E": {
+          "id": 0,
+          "description": "description"
+        },
+        "S": {
+          "id": 4,
+          "description": "description"
+        },
+        "W": {
+          "id": 1,
+          "description": "This path leads to Room A"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Room C",
+      "description": "This is Room C",
+      "connections": {
+        "N": {
+          "id": 0,
+          "description": "description"
+        },
+        "E": {
+          "id": 0,
+          "description": "description"
+        },
+        "S": {
+          "id": 2,
+          "description": "description"
+        },
+        "W": {
+          "id": 0,
+          "description": "This path leads to Room B"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Room D",
+      "description": "This is Room D",
+      "connections": {
+        "N": {
+          "id": 0,
+          "description": "description"
+        },
+        "E": {
+          "id": 0,
+          "description": "description"
+        },
+        "S": {
+          "id": 0,
+          "description": "description"
+        },
+        "W": {
+          "id": 3,
+          "description": "This path leads to Room B"
+        }
+      }
+    }
+  ]
+}

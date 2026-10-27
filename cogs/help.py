@@ -1,12 +1,8 @@
-from typing import Literal
-from enum import Enum
-import datetime
+import logging
 
-from discord.ext import commands, tasks
+from discord.ext import commands
 from views import HelpView
 import discord
-
-from utils.bollywood_utils import game_start_embed, pixelate_game_start_embed, plotster_game_start_embed, create_instructions_embed
 
 class Help(commands.Cog):
     """Help"""
@@ -14,25 +10,8 @@ class Help(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    async def main_help_message(self,
-                                ctx,
-                                cogs_to_show_help_for=['settings', 'games', 'fun', 'greetings', 'help', 'actions', 'animals', 'economy', 'shop']):
-        """Main help"""
-        desc = ""
-        emb = discord.Embed(title="Help",
-                            description=desc,
-                            color=discord.Color.gold())
-        for cog in self.bot.cogs:
-            fill = ""
-            if cog.lower() in cogs_to_show_help_for:
-                cog_obj = self.bot.get_cog(cog)
-                if cog_obj:
-                    for cmd in cog_obj.get_commands():
-                        if not cmd.hidden:
-                            fill += "`" + cmd.name + "` "
-                    if fill:
-                        fill = fill.strip() + "\n"
-                        emb.add_field(name=cog, value=fill, inline=False)
+    async def main_help_message(self, ctx):
+        """Interactive category-based modern help message"""
         if ctx.message:
             try:
                 prefix = await self.bot.get_prefixx(self.bot, ctx.message)
@@ -41,68 +20,80 @@ class Help(commands.Cog):
         else:
             prefix = getattr(self.bot, 'prefix', '.')
 
-        desc += f"\nFor more info about a command use `{prefix}help <command>`."
-        emb.description = desc
-        emb.set_footer(text="~TheWhistler")
+        view = HelpView(bot=self.bot, author_id=ctx.author.id, prefix=prefix)
+        emb = view.generate_embed("home")
+
         pfp = getattr(self.bot, 'pfp_url', None)
         if not pfp and self.bot.user:
             pfp = self.bot.user.display_avatar.url
         if pfp:
             emb.set_thumbnail(url=pfp)
-        await ctx.send(embed=emb, view=HelpView())
 
-    def embed_for_commands(self, command):
-        """Embed for a particular command"""
-        name = command.name
-        if name == "bollywood":
-            return game_start_embed("bollywood", help_mode=True)
-        elif name == "hollywood":
-            return game_start_embed("hollywood", help_mode=True)
-        elif name == "plotster":
-            return plotster_game_start_embed(help_mode=True)
-        elif name == "quizster":
-            return create_instructions_embed(help_mode=True)
-        elif name == "poster":
-            return pixelate_game_start_embed(help_mode=True)
-
-        return None
-
+        msg = await ctx.send(embed=emb, view=view)
+        view.message = msg
 
     async def help_for_command(self, ctx, command):
         """Help for a particular command"""
-        emb = None
-        for cmd in self.bot.commands:
-            if command == cmd.name or command in cmd.aliases:
-                emb = self.embed_for_commands(cmd)
-                if emb is None:
-                    emb = discord.Embed(title=cmd.name,
-                                        description=cmd.help or "No description provided.",
-                                        color=discord.Color.green())
-                break
+        cmd = self.bot.get_command(command)
+        if cmd is None:
+            cmd = next(
+                (candidate for candidate in self.bot.walk_commands()
+                 if command.lower() in {candidate.name.lower(), *(alias.lower() for alias in candidate.aliases)}),
+                None,
+            )
 
-        if emb is None:
+        if cmd is None:
             emb = discord.Embed(title="Command Not Found",
                                 description=f"Could not find a command named `{command}`.",
                                 color=discord.Color.red())
+        else:
+            prefix = getattr(ctx, "prefix", None) or getattr(self.bot, "prefix", ".")
+            suffix = f" {cmd.signature}" if cmd.signature else ""
+            usage = f"`{prefix}{cmd.qualified_name}{suffix}`"
+            emb = discord.Embed(
+                title=f"/{cmd.qualified_name} · {prefix}{cmd.qualified_name}",
+                description=cmd.help or "No description provided.",
+                color=discord.Color.green(),
+            )
+            emb.add_field(name="Usage", value=usage, inline=False)
+            aliases = getattr(cmd, "aliases", [])
+            if aliases:
+                emb.add_field(name="Aliases", value=", ".join(f"`{alias}`" for alias in aliases), inline=False)
 
-        await ctx.send(embed=emb, view=HelpView())
+        try:
+            prefix = await self.bot.get_prefixx(self.bot, ctx.message) if ctx.message else getattr(self.bot, "prefix", ".")
+        except Exception:
+            prefix = getattr(self.bot, "prefix", ".")
+        await ctx.send(embed=emb, view=HelpView(bot=self.bot, author_id=ctx.author.id, prefix=prefix))
 
     @commands.hybrid_command(name="help")
-    async def help(self, ctx, command=None):
-        """Shows help"""
-
+    async def help(self, ctx, command: str = None):
+        """Interactive help menu or details for a specific command"""
         if command is None:
             await self.main_help_message(ctx)
-        elif command.lower() in [word.lower() for word in self.bot.cogs]:
-            await self.main_help_message(
-                ctx, cogs_to_show_help_for=[command.lower()])
         else:
             await self.help_for_command(ctx, command)
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
+        if ctx.command and ctx.command.has_error_handler():
+            return
+        if isinstance(error, commands.CommandNotFound):
+            return
         if isinstance(error, commands.MaxConcurrencyReached):
-            await ctx.send("An instance is already running.", view=HelpView())
+            await ctx.send("A game is already running in this channel. Wait for it to finish or try again later.", view=HelpView(bot=self.bot, author_id=ctx.author.id, prefix=getattr(ctx, "prefix", ".")))
+        elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument, commands.TooManyArguments)):
+            command_name = ctx.command.qualified_name if ctx.command else "command"
+            prefix = getattr(ctx, "prefix", ".")
+            await ctx.send(f"I couldn't read those options. Use `{prefix}help {command_name}` or `/help {command_name}` to see the correct format.")
+        elif isinstance(error, commands.CommandOnCooldown):
+            await ctx.send(f"Please try again in {error.retry_after:.1f} seconds.")
+        elif isinstance(error, commands.CheckFailure):
+            await ctx.send("You cannot use this command here.")
+        else:
+            original = getattr(error, "original", error)
+            logging.getLogger(__name__).error("Command failed", exc_info=(type(original), original, original.__traceback__))
+            await ctx.send("Something went wrong. Please try again later.")
 
 
 async def setup(bot):

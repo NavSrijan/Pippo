@@ -23,8 +23,6 @@ from utils.bollywood_utils import (
     pixelate_image,
 )
 from views import TicTacToeView
-
-
 # ---------------------------------------------------------------------------
 # 1. Cog Loading & Command Tree Test
 # ---------------------------------------------------------------------------
@@ -42,7 +40,7 @@ async def test_all_cogs_load():
 
     cogs = [
         'actions', 'animals', 'bollywood', 'economy',
-        'fun', 'greetings', 'help', 'info', 'settings', 'shop'
+        'fun', 'greetings', 'help', 'info', 'settings', 'shop', 'play'
     ]
 
     for cog in cogs:
@@ -52,9 +50,10 @@ async def test_all_cogs_load():
     expected_sample = ['kiss', 'dog', 'cat', 'meow', 'woof', 'bollywood', 'hollywood',
                        'plotster', 'quizster', 'poster', 'bingo', 'tictactoe',
                        'balance', 'send_coins', 'ship', 'laser', 'flames',
-                       'help', 'change_prefix', 'leaderboard', 'suggest', 'shop']
+                       'help', 'change_prefix', 'leaderboard', 'suggest', 'shop', 'play']
     for cmd in expected_sample:
         assert cmd in registered_commands, f"Command {cmd} should be registered in bot"
+    await bot.close()
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +217,8 @@ async def test_deposit_score():
 
 def test_pixelate_image_fallback():
     # Non-existent URL should return fallback image without raising unhandled exception
-    res = pixelate_image("http://invalid-url-that-does-not-exist.test/img.png", 10)
+    with patch("utils.bollywood_utils.requests.get", side_effect=OSError("offline")):
+        res = pixelate_image("https://invalid.example/img.png", 10)
     assert isinstance(res, discord.File)
     assert res.filename == "pixelate_img.jpg"
 
@@ -292,11 +292,40 @@ def test_flames_algorithm():
 
 
 def test_views_initialization():
-    from views import MemoryView, GuessTheMovieView, HelpView, BreedGuessView
+    from views import MemoryView, GuessTheMovieView, HelpView, BreedGuessView, ChallengeInviteView, TicTacToeView
+    from cogs.settings import LeaderboardView, SuggestModal
 
-    # HelpView items
-    hv = HelpView()
-    assert len(hv.children) >= 2
+    # HelpView with Category Select
+    bot = MagicMock()
+    hv = HelpView(bot=bot, prefix="!")
+    assert len(hv.children) >= 3
+    home_emb = hv.generate_embed("home")
+    assert "Welcome to Pippo" in home_emb.title
+    games_emb = hv.generate_embed("games")
+    assert "Games" in games_emb.title
+
+    # ChallengeInviteView
+    p1 = MagicMock(id=1, display_name="P1")
+    p2 = MagicMock(id=2, display_name="P2")
+    civ = ChallengeInviteView(p1, p2, "Tic Tac Toe")
+    assert len(civ.children) == 2
+    assert civ.accepted is None
+
+    # TicTacToe with 2 players
+    ttv = TicTacToeView(player_x=p1, player_o=p2)
+    assert ttv.player_x == p1
+    assert ttv.player_o == p2
+    assert len(ttv.children) == 9
+
+    # LeaderboardView
+    mock_db = MagicMock()
+    lbv = LeaderboardView(mock_db, initial_key="bollywood")
+    assert len(lbv.children) >= 1
+
+    # SuggestModal
+    sm = SuggestModal(bot)
+    assert sm.subject is not None
+    assert sm.details is not None
 
     # MemoryView items
     user1 = MagicMock(id=1, mention="@u1")
@@ -312,4 +341,58 @@ def test_views_initialization():
     # BreedGuessView
     bgv = BreedGuessView("Persian", ["Persian", "Siamese", "Ragdoll", "Bengal"])
     assert len(bgv.children) == 4
+
+
+def test_single_player_modes():
+    from views import TicTacToeView, MemoryView, FloodView, BingoStartView
+
+    # 1. TicTacToe Solo vs Bot
+    user = MagicMock(id=101, mention="@user")
+    ttv = TicTacToeView(player_x=user, vs_bot=True)
+    assert ttv.vs_bot is True
+    assert ttv.player_o is None
+    # Player X makes a move
+    ttv.board[0][0] = ttv.X
+    ttv.current_player = ttv.O
+    # Bot makes a move
+    ttv.bot_move()
+    # Check that bot placed an O on the board
+    o_count = sum(row.count(ttv.O) for row in ttv.board)
+    assert o_count == 1
+    assert ttv.current_player == ttv.X
+
+    # 2. Memory Match Solo Mode
+    mv_solo = MemoryView(user)
+    assert mv_solo.is_solo is True
+    assert len(mv_solo.players) == 1
+    assert len(mv_solo.scores) == 1
+    assert mv_solo.moves == 0
+    assert mv_solo.pairs_found == 0
+
+    # 3. Flood Solo vs Pippo
+    emojis = {k: "emoji" for k in ["red", "green", "magenta", "blue", "yellow", "top_left", "bottom_right", "discord_loading"]}
+    fv = FloodView(user, emojis)
+    assert fv.vs_bot is False
+    assert len(fv.players) == 1
+
+    # 4. Bingo Solo Mode with Bot
+    class FakePlayer:
+        def __init__(self, uid):
+            self.id = uid
+            self.started = False
+            self.msg = None
+            self.cut = []
+            self.global_cut = []
+            self.number_list = [["1","2","3","4","5"],["6","7","8","9","10"],["11","12","13","14","15"],["16","17","18","19","20"],["21","22","23","24","25"]]
+
+    bot_id = 999
+    players = {101: FakePlayer(101), bot_id: FakePlayer(bot_id)}
+    bsv = BingoStartView(players, bot_user_id=bot_id)
+    assert bsv.bot_user_id == bot_id
+    # Simulate start_button logic
+    players[101].started = True
+    if bsv.bot_user_id and bsv.bot_user_id in bsv.players:
+        bsv.players[bsv.bot_user_id].started = True
+    assert bsv.players[bot_id].started is True
+    assert all(p.started for p in bsv.players.values())
 
