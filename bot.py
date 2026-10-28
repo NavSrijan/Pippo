@@ -50,6 +50,8 @@ class PippoBot(commands.Bot):
         self.get_prefixx = get_prefix
         self.production = production()
         self.THEWHISTLER = int(env("BOT_OWNER_ID", default="302253506947973130"))
+        self.owner_id = self.THEWHISTLER
+        self.start_time = discord.utils.utcnow()
         self.pool = None
         self.topggpy = None
         self.pfp_url = ""

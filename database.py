@@ -45,6 +45,19 @@ class Servers(Database):
             server_id, prefix,
         )
 
+    async def ensure_server(self, server_id, prefix="."):
+        """Add a server if missing without overriding existing custom prefix."""
+        await self.execute(
+            "INSERT INTO servers (server_id, prefix) VALUES ($1, $2) "
+            "ON CONFLICT (server_id) DO NOTHING;",
+            server_id, prefix,
+        )
+
+    async def get_all_servers(self):
+        """Fetch all recorded server records from database"""
+        sql = f"SELECT server_id, prefix FROM {self.tableName};"
+        return await self.view(sql)
+
     async def fetch_prefix(self, server_id):
         """Fetch a server's prefix from database"""
         sql = f"SELECT prefix FROM {self.tableName} WHERE server_id=$1;"
@@ -94,6 +107,102 @@ class Analytics(Database):
     async def insert_command(self, command, server_id, user_id):
         sql = f"INSERT INTO {self.tableName} (command, server_id, user_id, time_of_command) VALUES ($1, $2, $3, $4);"
         await self.execute(sql, command, server_id, user_id, datetime.datetime.now(datetime.UTC).replace(tzinfo=None))
+
+    async def get_summary_stats(self):
+        """Return total commands, unique users, unique servers, and recent command counts."""
+        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        yesterday = now - datetime.timedelta(days=1)
+        seven_days_ago = now - datetime.timedelta(days=7)
+
+        sql = f"""
+        SELECT
+            COUNT(*) AS total_commands,
+            COUNT(DISTINCT user_id) AS unique_users,
+            COUNT(DISTINCT server_id) FILTER (WHERE server_id IS NOT NULL) AS unique_servers,
+            COUNT(*) FILTER (WHERE server_id IS NULL) AS dm_commands,
+            COUNT(*) FILTER (WHERE time_of_command >= $1) AS commands_24h,
+            COUNT(*) FILTER (WHERE time_of_command >= $2) AS commands_7d
+        FROM {self.tableName};
+        """
+        res = await self.view(sql, yesterday, seven_days_ago)
+        if res:
+            row = res[0]
+            def _extract(key, idx):
+                if hasattr(row, "get"):
+                    v = row.get(key)
+                    if v is not None:
+                        return v
+                try:
+                    return row[key]
+                except Exception:
+                    try:
+                        return row[idx]
+                    except Exception:
+                        return 0
+
+            return {
+                "total_commands": _extract("total_commands", 0) or 0,
+                "unique_users": _extract("unique_users", 1) or 0,
+                "unique_servers": _extract("unique_servers", 2) or 0,
+                "dm_commands": _extract("dm_commands", 3) or 0,
+                "commands_24h": _extract("commands_24h", 4) or 0,
+                "commands_7d": _extract("commands_7d", 5) or 0,
+            }
+        return {
+            "total_commands": 0,
+            "unique_users": 0,
+            "unique_servers": 0,
+            "dm_commands": 0,
+            "commands_24h": 0,
+            "commands_7d": 0,
+        }
+
+    async def get_top_commands(self, limit=10, days=None):
+        """Return top commands by usage, optionally filtered to the last N days."""
+        if days:
+            cutoff = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - datetime.timedelta(days=days)
+            sql = f"""
+            SELECT command, COUNT(*) AS count
+            FROM {self.tableName}
+            WHERE time_of_command >= $1
+            GROUP BY command
+            ORDER BY count DESC
+            LIMIT $2;
+            """
+            return await self.view(sql, cutoff, limit)
+        sql = f"""
+        SELECT command, COUNT(*) AS count
+        FROM {self.tableName}
+        GROUP BY command
+        ORDER BY count DESC
+        LIMIT $1;
+        """
+        return await self.view(sql, limit)
+
+    async def get_server_stats(self, server_id):
+        """Return total commands and top commands for a specific server."""
+        sql_total = f"SELECT COUNT(*) AS total FROM {self.tableName} WHERE server_id = $1;"
+        sql_top = f"""
+        SELECT command, COUNT(*) AS count
+        FROM {self.tableName}
+        WHERE server_id = $1
+        GROUP BY command
+        ORDER BY count DESC
+        LIMIT 5;
+        """
+        total_res = await self.view(sql_total, server_id)
+        top_res = await self.view(sql_top, server_id)
+        total = 0
+        if total_res:
+            row = total_res[0]
+            if hasattr(row, "get"):
+                total = row.get("total") or 0
+            else:
+                try:
+                    total = row["total"]
+                except Exception:
+                    total = row[0]
+        return {"total_commands": total or 0, "top_commands": top_res or []}
 
 
 class BollywoodHangmanDB(Database):

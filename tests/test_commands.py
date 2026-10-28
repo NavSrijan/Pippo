@@ -74,6 +74,48 @@ async def test_database_analytics():
     assert args[2] == 111
     assert args[3] == 222
 
+    # Test summary stats
+    mock_conn.fetch.return_value = [{
+        "total_commands": 100,
+        "unique_users": 25,
+        "unique_servers": 15,
+        "dm_commands": 5,
+        "commands_24h": 12,
+        "commands_7d": 45,
+    }]
+    summary = await db.analytics.get_summary_stats()
+    assert summary["total_commands"] == 100
+    assert summary["unique_users"] == 25
+    assert summary["commands_24h"] == 12
+
+    # Test top commands
+    mock_conn.fetch.return_value = [{"command": "bollywood", "count": 50}, {"command": "dog", "count": 20}]
+    top = await db.analytics.get_top_commands(limit=5)
+    assert len(top) == 2
+    assert top[0]["command"] == "bollywood"
+
+    # Test server stats
+    mock_conn.fetch.side_effect = [[{"total": 30}], [{"command": "bingo", "count": 15}]]
+    server_stats = await db.analytics.get_server_stats(111)
+    assert server_stats["total_commands"] == 30
+    assert len(server_stats["top_commands"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_database_servers_helpers():
+    mock_pool = MagicMock()
+    mock_conn = AsyncMock()
+    mock_pool.acquire.return_value.__aenter__.return_value = mock_conn
+
+    db = database.DB(mock_pool)
+    await db.servers.ensure_server(999, "!")
+    mock_conn.execute.assert_called_once()
+    assert "ON CONFLICT (server_id) DO NOTHING" in mock_conn.execute.call_args[0][0]
+
+    mock_conn.fetch.return_value = [{"server_id": 999, "prefix": "!"}]
+    res = await db.servers.get_all_servers()
+    assert len(res) == 1
+
 
 @pytest.mark.asyncio
 async def test_database_coins():
@@ -395,4 +437,82 @@ def test_single_player_modes():
         bsv.players[bsv.bot_user_id].started = True
     assert bsv.players[bot_id].started is True
     assert all(p.started for p in bsv.players.values())
+
+
+@pytest.mark.asyncio
+async def test_info_owner_commands():
+    from cogs.info import Info
+    mock_bot = MagicMock()
+    mock_bot.THEWHISTLER = 123456
+    mock_bot.prefix = "."
+    mock_bot.latency = 0.05
+    mock_bot.start_time = discord.utils.utcnow()
+    
+    # Guild mocks
+    guild1 = MagicMock(spec=discord.Guild)
+    guild1.id = 111
+    guild1.name = "Guild One"
+    guild1.member_count = 50
+    guild1.owner = MagicMock(display_name="OwnerOne")
+    guild1.owner_id = 9991
+    guild1.created_at = discord.utils.utcnow()
+    guild1.icon = None
+
+    guild2 = MagicMock(spec=discord.Guild)
+    guild2.id = 222
+    guild2.name = "Guild Two"
+    guild2.member_count = 150
+    guild2.owner = MagicMock(display_name="OwnerTwo")
+    guild2.owner_id = 9992
+    guild2.created_at = discord.utils.utcnow()
+    guild2.icon = None
+
+    mock_bot.guilds = [guild1, guild2]
+    mock_bot.get_guild.side_effect = lambda gid: {111: guild1, 222: guild2}.get(gid)
+    mock_bot.is_owner = AsyncMock(return_value=True)
+
+    cog = Info(mock_bot)
+
+    # 1. servers command
+    ctx = MagicMock()
+    ctx.author = AsyncMock()
+    ctx.author.id = 123456
+    ctx.guild = None
+    await cog.servers.callback(cog, ctx)
+    ctx.author.send.assert_called_once()
+    assert "file" in ctx.author.send.call_args.kwargs
+
+    # 2. analytics command
+    mock_bot.db = MagicMock()
+    mock_bot.db.analytics.get_summary_stats = AsyncMock(return_value={
+        "total_commands": 500, "unique_users": 80, "unique_servers": 30,
+        "dm_commands": 10, "commands_24h": 40, "commands_7d": 120
+    })
+    mock_bot.db.analytics.get_top_commands = AsyncMock(return_value=[("bollywood", 200)])
+    ctx_send = AsyncMock()
+    ctx.send = ctx_send
+    await cog.analytics.callback(cog, ctx)
+    ctx_send.assert_called_once()
+    assert "embed" in ctx_send.call_args.kwargs
+
+    # 3. topcommands command
+    ctx_send.reset_mock()
+    await cog.topcommands.callback(cog, ctx, days=7, limit=5)
+    ctx_send.assert_called_once()
+
+    # 4. serverinfo command
+    ctx_send.reset_mock()
+    mock_bot.db.servers.fetch_prefix = AsyncMock(return_value="!")
+    mock_bot.db.analytics.get_server_stats = AsyncMock(return_value={"total_commands": 25, "top_commands": [("dog", 10)]})
+    await cog.serverinfo.callback(cog, ctx, guild_id=111)
+    ctx_send.assert_called_once()
+
+    # 5. syncservers command
+    ctx_send.reset_mock()
+    mock_bot.db.servers.get_all_servers = AsyncMock(return_value=[{"server_id": 111, "prefix": "!"}])
+    mock_bot.db.servers.ensure_server = AsyncMock()
+    await cog.syncservers.callback(cog, ctx)
+    mock_bot.db.servers.ensure_server.assert_called_once_with(222, ".")
+    ctx_send.assert_called_once()
+
 
