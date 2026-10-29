@@ -2,6 +2,7 @@ import logging
 
 from discord.ext import commands
 from views import HelpView
+from runtime import SessionBusy
 import discord
 
 class Help(commands.Cog):
@@ -67,7 +68,7 @@ class Help(commands.Cog):
         await ctx.send(embed=emb, view=HelpView(bot=self.bot, author_id=ctx.author.id, prefix=prefix))
 
     @commands.hybrid_command(name="help")
-    async def help(self, ctx, command: str = None):
+    async def help(self, ctx, *, command: str = None):
         """Interactive help menu or details for a specific command"""
         if command is None:
             await self.main_help_message(ctx)
@@ -88,6 +89,8 @@ class Help(commands.Cog):
             await ctx.send(f"I couldn't read those options. Use `{prefix}help {command_name}` or `/help {command_name}` to see the correct format.")
         elif isinstance(error, commands.CommandOnCooldown):
             await ctx.send(f"Please try again in {error.retry_after:.1f} seconds.")
+        elif isinstance(error, SessionBusy):
+            await ctx.send(str(error))
         elif isinstance(error, commands.CheckFailure):
             await ctx.send("You cannot use this command here.")
         else:

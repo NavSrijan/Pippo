@@ -19,7 +19,11 @@ CREATE TABLE IF NOT EXISTS bollywood_points (
 CREATE TABLE IF NOT EXISTS plotster_points (
     user_id BIGINT PRIMARY KEY, points INT DEFAULT 0, rounds INT DEFAULT 0
 );
-CREATE TABLE IF NOT EXISTS points (user_id BIGINT PRIMARY KEY, coins INT NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS points (user_id BIGINT PRIMARY KEY, coins BIGINT NOT NULL DEFAULT 0);
+ALTER TABLE points ALTER COLUMN coins TYPE BIGINT;
+CREATE INDEX IF NOT EXISTS pippo_coin_ranking ON points (coins DESC, user_id);
+CREATE INDEX IF NOT EXISTS pippo_movie_ranking ON bollywood_points (points DESC, user_id) WHERE points IS NOT NULL;
+CREATE INDEX IF NOT EXISTS pippo_plotster_ranking ON plotster_points (points DESC, user_id) WHERE points IS NOT NULL;
 CREATE TABLE IF NOT EXISTS characters (
     user_id BIGINT PRIMARY KEY, show_name TEXT, cartoon_character TEXT,
     dog_breed TEXT, cat_breed TEXT

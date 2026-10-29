@@ -62,3 +62,59 @@ async def test_guild_prefix_character_upserts_and_dm_analytics(db):
     await db.analytics.insert_command('play', None, 1)
     rows = await db.view('SELECT server_id FROM analytics')
     assert rows[0]['server_id'] is None
+
+
+async def test_one_hundred_purchases_cannot_overdraw(db):
+    await db.coins.add_coins(1, coins=5500)
+    results = await asyncio.gather(*(
+        db.characters.purchase_cartoon_character(1, 'Show', f'Character {n}') for n in range(100)
+    ))
+    assert sum(results) == 5
+    assert (await db.coins.get_amount_coins(1))['coins'] == 500
+    assert (await db.characters.get_character(1))['cartoon_character'].startswith('Character ')
+
+
+async def test_purchase_rolls_back_charge_when_character_save_fails(db):
+    await db.coins.add_coins(1, coins=2000)
+    await db.execute("ALTER TABLE characters ADD CONSTRAINT reject_test_identity CHECK (cartoon_character <> 'Rejected')")
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.characters.purchase_cartoon_character(1, 'Show', 'Rejected')
+    assert (await db.coins.get_amount_coins(1))['coins'] == 2000
+    assert await db.characters.get_character(1) is None
+
+
+async def test_opposing_transfers_and_scores_under_load(db):
+    for uid in range(1, 11):
+        await db.coins.add_coins(uid, coins=1000)
+    await asyncio.gather(*(
+        db.coins.transfer((n % 10) + 1, ((n + 1) % 10) + 1, 1) for n in range(300)
+    ))
+    await asyncio.gather(*(db.plotsterDB.update_score((n % 10) + 1, 1, 1) for n in range(200)))
+    balances = await db.view('SELECT coins FROM points')
+    assert sum(row['coins'] for row in balances) == 10000
+    assert all(row['coins'] >= 0 for row in balances)
+    scores = await db.view('SELECT points, rounds FROM plotster_points')
+    assert sum(row['points'] for row in scores) == 200
+    assert sum(row['rounds'] for row in scores) == 200
+
+
+async def test_score_and_coin_awards_remain_consistent_under_load(db):
+    await asyncio.gather(*(db.award_movie_score(1, 1, 1, 'plotster') for _ in range(100)))
+    score = (await db.view('SELECT points, rounds FROM plotster_points WHERE user_id=1'))[0]
+    assert score['points'] == score['rounds'] == 100
+    assert (await db.coins.get_amount_coins(1))['coins'] == 500
+
+
+async def test_transfer_can_credit_large_existing_balances(db):
+    await db.coins.add_coins(1, coins=2_000_000_000)
+    await db.coins.add_coins(2, coins=2_000_000_000)
+    assert await db.coins.transfer(1, 2, 2_000_000_000)
+    assert (await db.coins.get_amount_coins(2))['coins'] == 4_000_000_000
+
+
+async def test_existing_integer_coin_migration_keeps_balances(db):
+    await db.execute('ALTER TABLE points ALTER COLUMN coins TYPE INTEGER')
+    await db.coins.add_coins(1,coins=123)
+    await db.execute(Path('schema.sql').read_text())
+    assert (await db.coins.get_amount_coins(1))['coins']==123
+    assert (await db.view("SELECT data_type FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='points' AND column_name='coins'"))[0]['data_type']=='bigint'

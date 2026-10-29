@@ -22,21 +22,28 @@ class Flood():
         self.box_colors = []
         self.players = {}
         self.gen_image()
-        #adj = self.flood_fill(0, 0, (255, 0, 0))
-        #self.update_image(adj)
-        x = self.GRID_SIZE-1
-        if len(players)==2:
-            home_squares = [[0, 0], [x, x]]
-        elif len(players)==3:
-            home_squares = [[0, 0], [x, 0], [x, x]]
-        elif len(players)==4:
-            home_squares = [[0, 0], [x, 0], [0, x], [x, x]]
-        for i, j in enumerate(players):
-            x = home_squares[i][0]
-            y = home_squares[i][1]
-            self.players[j.id] = {"color": self.box_colors[x][y], "total_pixels": 1, "home_square": home_squares[i]}
+        end = self.GRID_SIZE - 1
+        home_squares = {
+            2: [(0, 0), (end, end)],
+            3: [(0, 0), (0, end), (end, end)],
+            4: [(0, 0), (0, end), (end, 0), (end, end)],
+        }.get(len(players))
+        if home_squares is None:
+            raise ValueError("Flood supports two to four players.")
+
+        used_colors = set()
+        for player, home in zip(players, home_squares):
+            row, column = home
+            color = self.box_colors[row][column]
+            if color in used_colors:
+                color = random.choice([candidate for candidate in self.colors if candidate not in used_colors])
+                self.box_colors[row][column] = color
+            used_colors.add(color)
+            self.players[player.id] = {"color": color, "total_pixels": 1, "home_square": home}
+        self.update_image()
 
     def gen_image(self):
+        self.box_colors = []
         # Create a new image with the desired size
         self.image = Image.new('RGB', (self.IMAGE_SIZE, self.IMAGE_SIZE))
         #random.seed(69)
@@ -47,60 +54,33 @@ class Flood():
             for j in range(self.GRID_SIZE):
                 box_color = random.choice(self.colors)
                 temp_ll.append(box_color)
-                for x in range(i * self.BOX_SIZE, (i + 1) * self.BOX_SIZE):
-                    for y in range(j * self.BOX_SIZE, (j + 1) * self.BOX_SIZE):
-                        #for k in self.get_coords((x, y)):
-                        self.image.putpixel((x,y), box_color)
 
             self.box_colors.append(temp_ll)
         #self.draw_borders(border_boxes)
         #self.image.show()
 
     def update_image(self):
-        try:
-            # Create a new image with the desired size
-            self.image = Image.new('RGB', (self.IMAGE_SIZE, self.IMAGE_SIZE))
-            adj1 = self.flood_fill(0,0, self.box_colors[0][0])
-            xxx = self.GRID_SIZE-1
-            adj2 = self.flood_fill(xxx,xxx, self.box_colors[xxx][xxx])
+        self.image = Image.new('RGB', (self.IMAGE_SIZE, self.IMAGE_SIZE))
+        draw = ImageDraw.Draw(self.image)
 
-            ids = []
-            for i in self.players.keys():
-                ids.append(i)
+        for player in self.players.values():
+            row, column = player["home_square"]
+            color = self.box_colors[row][column]
+            region = self.flood_fill(row, column, color)
+            player["color"] = color
+            player["total_pixels"] = len(region)
 
-            self.players[ids[0]]["color"] = self.box_colors[0][0] 
-            self.players[ids[0]]["total_pixels"] = len(adj1)
-
-            self.players[ids[1]]["color"] = self.box_colors[xxx][xxx] 
-            self.players[ids[1]]["total_pixels"] = len(adj2)
-
-            # Draw the grid of boxes on the image
-            for i in range(self.GRID_SIZE):
-                for j in range(self.GRID_SIZE):
-                    diffx1 = 0
-                    diffy1 = 0
-                    diffx2 = 0
-                    diffy2 = 0
-                    diff = 2
-                    box_color = self.box_colors[i][j]
-                    if (i,j) in adj1 or (i,j) in adj2:
-                        edges = self.check_four_sides(i, j)
-                        if len(edges) != 0:
-                            if 0 in edges:
-                                diffy2 = -diff
-                            if 1 in edges:
-                                diffx1 = diff
-                            if 2 in edges:
-                                diffx2 = diff
-                            if 3 in edges:
-                                diffy1 = -diff
-
-                    for x in range((i * self.BOX_SIZE)-diffy1, ((i + 1) * self.BOX_SIZE)-diffx1):
-                        for y in range((j * self.BOX_SIZE)-diffy2, ((j + 1) * self.BOX_SIZE)-diffx2):
-                            self.image.putpixel((x, y), box_color)
-
-        except Exception as e:
-            print(e)
+        for row in range(self.GRID_SIZE):
+            for column in range(self.GRID_SIZE):
+                left = column * self.BOX_SIZE
+                top = row * self.BOX_SIZE
+                right = left + self.BOX_SIZE - 1
+                bottom = top + self.BOX_SIZE - 1
+                draw.rectangle(
+                    (left, top, right, bottom),
+                    fill=self.box_colors[row][column],
+                    outline=(34, 38, 52),
+                )
 
 
     def return_image(self):
@@ -133,55 +113,74 @@ class Flood():
             j+=1
         return edges
 
-    def flood_fill(self, start_x, start_y, target_color):
-        # Dimensions of the grid
+    def flood_fill(self, start_row, start_column, target_color):
+        """Return a four-direction connected region in row-column coordinates."""
         grid = self.box_colors
         rows = len(grid)
         cols = len(grid[0])
 
         visited = [[False for _ in range(cols)] for _ in range(rows)]
-        adjacent_squares = []
+        region = []
 
-        if start_y < 0 or start_y >= rows or start_x < 0 or start_x >= cols:
-            return adjacent_squares
-        if grid[start_y][start_x] != target_color:
-            return adjacent_squares
+        if start_row < 0 or start_row >= rows or start_column < 0 or start_column >= cols:
+            return region
+        if grid[start_row][start_column] != target_color:
+            return region
 
-        stack = [(start_x, start_y)]
-        visited[start_y][start_x] = True
+        stack = [(start_row, start_column)]
+        visited[start_row][start_column] = True
 
         while stack:
-            cx, cy = stack.pop()
-            adjacent_squares.append((cy, cx))
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < cols and 0 <= ny < rows and not visited[ny][nx]:
-                    if grid[ny][nx] == target_color:
-                        visited[ny][nx] = True
-                        stack.append((nx, ny))
+            row, column = stack.pop()
+            region.append((row, column))
+            for row_delta, column_delta in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                next_row = row + row_delta
+                next_column = column + column_delta
+                if 0 <= next_row < rows and 0 <= next_column < cols and not visited[next_row][next_column]:
+                    if grid[next_row][next_column] == target_color:
+                        visited[next_row][next_column] = True
+                        stack.append((next_row, next_column))
 
-        return adjacent_squares
+        return region
 
     def replace_pixels(self, user_id, color_to_put):
         """Replace pixels of a player"""
         player = self.players[user_id]
-        x = player['home_square'][0]
-        y = player['home_square'][1]
-
-        color = self.box_colors[x][y]
-        adj = self.flood_fill(x, y, color)
-        for square in adj:
-            self.box_colors[square[0]][square[1]] = color_to_put
+        row, column = player['home_square']
+        color = self.box_colors[row][column]
+        region = self.flood_fill(row, column, color)
+        for square_row, square_column in region:
+            self.box_colors[square_row][square_column] = color_to_put
         self.update_image()
 
-    def return_probable_buttons(self):
+    def territory_gain(self, user_id, color_to_put):
+        """Estimate how many cells a color would add to this player's region."""
+        player = self.players[user_id]
+        row, column = player["home_square"]
+        original_grid = [line[:] for line in self.box_colors]
+        old_size = player["total_pixels"]
+        current_color = self.box_colors[row][column]
+        owned = self.flood_fill(row, column, current_color)
+        try:
+            for square_row, square_column in owned:
+                self.box_colors[square_row][square_column] = color_to_put
+            new_size = len(self.flood_fill(row, column, color_to_put))
+        finally:
+            self.box_colors = original_grid
+        return new_size - old_size
+
+    def return_probable_buttons(self, user_id=None):
         """
         Returns the color of buttons which a user can have.
         It will **not** include, the color of the original pixels of the user,
         and **not** the color of the pixels of the opponent.
         """
         player_colors = {i['color'] for i in self.players.values()}
-        return [c for c in self.colors if c not in player_colors]
+        choices = [color for color in self.colors if color not in player_colors]
+        if user_id is None:
+            return choices
+        growth = {color: self.territory_gain(user_id, color) for color in choices}
+        return sorted(choices, key=lambda color: growth[color], reverse=True)
 
     def get_percentages(self):
         """Return percentages"""
@@ -192,6 +191,5 @@ class Flood():
             percentages.append(perc)
 
         return percentages
-
 
 

@@ -1,83 +1,84 @@
+from runtime import run_blocking
 import random
-from discord.ext import commands
+
 import discord
+from discord.ext import commands
+
+from views import KissConsentView, kiss_art_file
+
 
 class Actions(commands.Cog):
-    """Actions commands"""
+    """Lightweight social actions."""
 
     def __init__(self, bot):
         self.bot = bot
 
     @commands.hybrid_command(name="kiss")
     async def kiss(self, ctx, user: discord.Member = None):
-        """Kiss another user or air"""
-        emb = discord.Embed(color=discord.Color.fuchsia())
-        author_name = ctx.author.display_name
-
+        """Send a recipient-controlled kiss request, or a friendly air-kiss."""
+        actor = discord.utils.escape_markdown(ctx.author.display_name[:72]).replace("@", "@\u200b")
         if user is None:
-            emb.title = f"{author_name} kissed air"
-        else:
-            target_name = user.display_name
-            accepted = random.choices([True, False], weights=[60, 40])[0]
-            if accepted:
-                # ACCEPTANCE
-                lines = [
-                    "{} planted a soft kiss on {}'s lips.",
-                    "The tender touch of {}'s lips met {}'s in a sweet, lingering kiss.",
-                    "{} leaned in and gently pressed their lips against {}'s, creating a moment of pure bliss.",
-                    "A passionate exchange of kisses occurred between {} and {}, leaving them both breathless.",
-                    "The world seemed to fade away as {} and {} locked lips in a passionate embrace.",
-                    "{} initiated a passionate kiss, igniting a spark of desire between them and {}.",
-                    "In a moment of pure spontaneity, {} leaned in and kissed {}, setting their hearts ablaze.",
-                    "The chemistry between {} and {} was undeniable, as their lips met in a fiery, unforgettable kiss.",
-                    "{}'s soft lips brushed against {}'s, leaving them both longing for more.",
-                    "The gentle touch of {}'s lips against {}'s sent shivers down their spines, creating a memory they would cherish forever."
-                ]
+            lines = (
+                "blew a friendly air-kiss to the whole chat. 💌",
+                "sent a tiny heart-shaped hello past the snack table. 💛",
+                "launched a kiss into the chat; Pippo says catch it if you like. 🪽",
+                "sent a friendly air-kiss with absolutely no pressure. 💋",
+            )
+            embed = discord.Embed(
+                title="A little kiss for the chat",
+                description=f"**{actor}** {random.choice(lines)}",
+                color=discord.Color.fuchsia(),
+            )
+            artwork = await run_blocking(kiss_art_file, embed, "kiss-air")
+            options = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
+            if artwork:
+                options["file"] = artwork
+            await ctx.reply(**options)
+            return
 
-                gifs = [
-                    "https://media.tenor.com/28PRxZllZ88AAAAS/skitchura-skitchura-d.gif",
-                    "https://media.tenor.com/FNHYYfHcKLkAAAAC/katrina-kaif-ranbir-kapoor.gif",
-                    "https://media.tenor.com/X5krze_s5rIAAAAS/beyhadh2-mayra.gif",
-                    "https://media.tenor.com/8sbfoBtT628AAAAC/ye-rishta-kya-kehlata-hai-indian-television-soap-opera.gif",
-                    "https://media.tenor.com/weXHd8OOT0gAAAAC/kiss-enthiran.gif",
-                    "https://media.tenor.com/MOfAaO_0iIYAAAAd/kiss-ramesh.gif",
-                    "https://media.tenor.com/FmmWlSywFBkAAAAd/bollywood2-deepika-padukone.gif",
-                    "https://media.tenor.com/r3iZ8UJc-AwAAAAd/%E1%83%9A%E1%83%90%E1%83%9B%E1%83%90%E1%83%96%E1%83%9D-flirti.gif",
-                    "https://media.tenor.com/41b3mGyJrNsAAAAd/alia-bhatt-sidharth-malhotra.gif",
-                    "https://media.tenor.com/wANmca86o1kAAAAS/petekao-dark-blue-kiss.gif"
-                ]
-                emb.title = random.choice(lines).format(author_name, target_name)
+        if user.id == ctx.author.id:
+            await ctx.reply(
+                "A kiss request needs someone else to answer. Leave the target blank for a friendly air-kiss.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+        if user.bot:
+            await ctx.reply(
+                "Bots cannot answer a kiss request. Leave the target blank and Pippo will send an air-kiss instead.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        recipient = discord.utils.escape_markdown(user.display_name[:72]).replace("@", "@\u200b")
+
+        def render_result(decision):
+            if decision == "accepted":
+                title = "A friendly kiss was accepted 💛"
+                description = f"**{recipient}** accepted **{actor}**'s little greeting. Pippo sends a heart-shaped hello."
+            elif decision == "declined":
+                title = "Request passed 🙌"
+                description = f"**{recipient}** passed on **{actor}**'s greeting. Pippo sends a cheerful wave instead."
+            elif decision == "expired":
+                title = "The greeting request expired"
+                description = f"**{recipient}** didn't answer in time, so the request closed quietly. No kiss was sent."
             else:
-                # REJECTION
-                lines = [
-                    "{} gently turned away, avoiding {}'s attempt to kiss their lips.",
-                    "Despite the anticipation, {} pulled back, preventing their lips from meeting {}'s.",
-                    "{} hesitated, refraining from pressing their lips against {}'s, signaling a rejection.",
-                    "{} quickly averted their gaze, denying {} the passionate exchange of kisses they desired.",
-                    "{} gently pushed {} away, choosing not to lock lips in a passionate embrace.",
-                    "With a hint of regret, {} gently declined {}'s attempt to initiate a passionate kiss.",
-                    "{} stepped back, avoiding the fiery and unforgettable kiss {} yearned for.",
-                    "{} offered a polite smile, signaling that their lips were off-limits to {}.",
-                    "{} withdrew slightly, creating a physical distance that prevented {}'s soft lips from brushing against theirs.",
-                    "{} politely refused {}'s advances, knowing that their lips meeting would only create a memory of heartache."
-                ]
+                title = "A little greeting request"
+                description = f"**{actor}** would like to send **{recipient}** a friendly kiss. Only {recipient} can choose."
+            embed = discord.Embed(title=title, description=description, color=discord.Color.fuchsia())
+            artwork = kiss_art_file(embed, f"kiss-{decision}")
+            return embed, artwork
 
-                gifs = [
-                    "https://media.tenor.com/P3FvJNYdca4AAAAC/%E0%A4%A8%E0%A4%B9%E0%A5%80%E0%A4%82-%E0%A4%A8%E0%A4%BE.gif",
-                    "https://media.tenor.com/WJavYXjegxQAAAAC/crying-oru-indian-pranayakadha.gif",
-                    "https://media.tenor.com/s3E5Yd67X88AAAAd/cry-about-it-mald.gif",
-                    "https://media.tenor.com/KnvA9TyNb2cAAAAC/china-trespasses-indian-territory-bhosdike.gif",
-                    "https://media.tenor.com/5xAy0jp9aCAAAAAC/vaak-kamal-haasan.gif",
-                    "https://media.tenor.com/ONDeXUgmKRkAAAAS/hadeel928-%D8%AD%D8%B2%D9%86.gif",
-                    "https://media.tenor.com/_lBztfGBlV8AAAAC/nikal.gif",
-                    "https://media.tenor.com/-7M8TqyT0dsAAAAd/hrithik-roshan.gif"
-                ]
-                emb.title = random.choice(lines).format(target_name, author_name)
+        view = KissConsentView(user.id, render_result)
+        embed, artwork = await run_blocking(render_result, "pending")
+        options = {
+            "embed": embed,
+            "view": view,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if artwork:
+            options["file"] = artwork
+        view.message = await ctx.reply(**options)
 
-            emb.set_image(url=random.choice(gifs))
-
-        await ctx.reply(embed=emb)
 
 async def setup(bot):
     await bot.add_cog(Actions(bot))
-

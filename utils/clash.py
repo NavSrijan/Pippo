@@ -6,6 +6,7 @@ import os
 import random
 
 import aiohttp
+from runtime import http_session, read_limited
 
 log = logging.getLogger(__name__)
 DEFAULT_MODEL = "openai/gpt-oss-120b"
@@ -21,7 +22,7 @@ JUDGMENT_SCHEMA = {
 }
 
 
-async def judge_clash(player1, creation1, player2, creation2):
+async def judge_clash(player1, creation1, player2, creation2, *, bot=None):
     """Return a winner and reason; keep a clearly labelled offline fallback."""
     api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("openrouter_api_key")
     model = os.environ.get("OPENROUTER_MODEL", DEFAULT_MODEL)
@@ -46,7 +47,8 @@ async def judge_clash(player1, creation1, player2, creation2):
                 },
             ],
             "temperature": 0.5,
-            "max_tokens": 256,
+            # The default reasoning model shares this budget with visible JSON.
+            "max_tokens": 2048,
             "response_format": {
                 "type": "json_schema",
                 "json_schema": {
@@ -55,28 +57,32 @@ async def judge_clash(player1, creation1, player2, creation2):
                     "schema": JUDGMENT_SCHEMA,
                 },
             },
-            "provider": {
-                "data_collection": "deny",
-                "zdr": True,
-                "require_parameters": True,
-            },
+            "provider": {"require_parameters": True},
         }
+        # Strict is the privacy-preserving default. Some explicitly selected
+        # models only have endpoints that don't meet these routing constraints.
+        if os.environ.get("OPENROUTER_PRIVACY_MODE", "strict").strip().lower() == "strict":
+            payload["provider"].update({"data_collection": "deny", "zdr": True})
+        if model.split(":", 1)[0] == DEFAULT_MODEL:
+            payload["reasoning"] = {"effort": "low", "exclude": True}
         headers = {
             "Authorization": f"Bearer {api_key}",
             "HTTP-Referer": os.environ.get("OPENROUTER_SITE_URL", "https://pippo.shoonya.live"),
             "X-OpenRouter-Title": os.environ.get("OPENROUTER_APP_NAME", "Pippo"),
         }
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-                async with session.post(CHAT_COMPLETIONS_URL, headers=headers, json=payload) as response:
+            async with http_session(bot, timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.post(CHAT_COMPLETIONS_URL, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=30, connect=5)) as response:
                     if response.status != 200:
                         # Do not log request headers, URLs, or provider bodies containing input.
                         raise ValueError(f"OpenRouter returned HTTP {response.status}")
-                    data = await response.json()
+                    data = json.loads(await read_limited(response, 256 * 1024))
             content = data["choices"][0]["message"]["content"]
             if isinstance(content, list):
                 content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
             result = json.loads(content)
+            if not isinstance(result, dict):
+                raise ValueError("Judgment must be a JSON object")
             if type(result.get("winner")) is not int or result["winner"] not in (1, 2):
                 raise ValueError("Invalid winner in OpenRouter response")
             reason = result.get("reason")

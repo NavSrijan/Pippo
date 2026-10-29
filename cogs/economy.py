@@ -33,9 +33,12 @@ class Economy(commands.Cog):
     @app_commands.describe(user="The member to send coins to", coins="Amount of coins to transfer")
     @commands.hybrid_command(name="send_coins")
     async def send_coins(self, ctx, user: discord.Member, coins: int = 0):
-        """Send coins to another user"""
+        """Transfer virtual Pippo coins to another member"""
         if coins <= 0:
             await ctx.reply("You must send at least 1 coin.", ephemeral=True)
+            return
+        if coins > 2_147_483_647:
+            await ctx.reply("A single transfer cannot exceed 2,147,483,647 coins.", ephemeral=True)
             return
         if ctx.author.id == user.id:
             await ctx.reply("You cannot send coins to yourself.", ephemeral=True)
@@ -58,4 +61,3 @@ class Economy(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Economy(bot))
-

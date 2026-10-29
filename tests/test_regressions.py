@@ -37,13 +37,12 @@ async def test_replacing_bingo_board_cancels_old_timeout():
 
 
 @pytest.mark.asyncio
-async def test_documented_solo_flag_activates_solo():
+async def test_help_documents_one_solo_start_screen():
     bot = commands.Bot(command_prefix='.', help_command=None, intents=discord.Intents.none())
     await bot.add_cog(Games(bot))
     embed = HelpView(bot).generate_embed('games')
-    assert 'solo: True' in '\n'.join(field.value for field in embed.fields)
-    flags = await BollywoodFlags.convert(MagicMock(current_parameter=None, command=None), 'solo: True')
-    assert flags.solo is True
+    assert 'Play solo' in '\n'.join(field.value for field in embed.fields)
+    assert 'solo' not in BollywoodFlags.get_flags()
     await bot.close()
 
 
@@ -56,7 +55,7 @@ async def launcher_fixture():
     @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
     @commands.hybrid_command(name='bollywood')
     async def game(ctx, *, flags: BollywoodFlags):
-        received.append(flags.solo)
+        received.append(ctx._pippo_play_mode)
         entered.set()
         await release.wait()
 
@@ -106,16 +105,17 @@ async def test_clash_bot_duel_uses_requesters_creation():
     pippo = NS(id=3, display_name='Pippo', mention='<@3>')
     users = {user.id: user for user in (first, second, pippo)}
     bot = NS(user=pippo, get_user=users.get)
-    ctx = NS(author=first, guild=NS(get_member=users.get),
+    ctx = NS(author=second, guild=NS(get_member=users.get), _pippo_play_mode=True, _pippo_options={},
              send=AsyncMock(return_value=NS(edit=AsyncMock())))
     games_type = importlib.import_module('cogs.bollywood').Games
     with patch('cogs.bollywood.judge_clash', AsyncMock(return_value=(second, 'A lucky win'))) as judge:
         task = asyncio.create_task(games_type.ai_clash.callback(games_type(bot), ctx))
-        await asyncio.sleep(0)
+        async with asyncio.timeout(3):
+            while ctx.send.call_args is None:
+                await asyncio.sleep(0.001)
         view = ctx.send.call_args.kwargs['view']
-        for user, button, creation in ((first, view.submit_button, 'First creation'),
-                                        (second, view.duel_bot_button, 'Second creation')):
-            interaction = NS(user=user, client=bot, response=NS(send_modal=AsyncMock(), send_message=AsyncMock()))
+        for user, button, creation in ((second, view.submit_button, 'Second creation'),):
+            interaction = NS(user=user, client=bot, response=NS(send_modal=AsyncMock(), send_message=AsyncMock(), defer=AsyncMock()), followup=NS(send=AsyncMock()))
             await button.callback(interaction)
             modal = interaction.response.send_modal.call_args.args[0]
             modal.creation._value = creation
@@ -192,9 +192,11 @@ def test_new_room_can_be_fetched_without_restarting_editor(monkeypatch):
 async def test_openrouter_structured_response_and_configurable_model(monkeypatch):
     monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
     monkeypatch.setenv('OPENROUTER_MODEL', 'configured-model')
-    response = NS(status=200, json=AsyncMock(return_value={
-        'choices': [{'message': {'content': json.dumps({'winner': 2, 'reason': 'Clever trick'})}}]
-    }))
+    monkeypatch.delenv('OPENROUTER_PRIVACY_MODE', raising=False)
+    body = json.dumps({'choices': [{'message': {'content': json.dumps({'winner': 2, 'reason': 'Clever trick'})}}]}).encode()
+    async def chunks(size):
+        yield body
+    response = NS(status=200, content_length=len(body), content=NS(iter_chunked=chunks))
     session = MagicMock()
     session.post.return_value.__aenter__ = AsyncMock(return_value=response)
     with patch('utils.clash.aiohttp.ClientSession') as client:
@@ -263,7 +265,7 @@ async def test_bot_close_releases_pool_without_starting_discord():
 async def test_quiz_resolution_counts_unanswered_players_once():
     from views import QuizsterView
     quiz = NS(movie={'actors': 'A', 'description': 'Plot', 'rating': '5', 'genre': 'Drama',
-                     'duration': '120', 'datePublished': '2020-01-01'}, hint='Hint', answer_index=0)
+                     'duration': '120', 'datePublished': '2020-01-01'}, hint='Hint', answer_index=0, options=['A','B','C','D'])
     view = QuizsterView(quiz)
     view.people = {1: [3, 0], 2: [1, 0]}
     view.people_playing = [1, 2]
@@ -279,14 +281,14 @@ async def test_quiz_resolution_counts_unanswered_players_once():
 async def test_skip_does_not_score_or_allow_another_skip():
     from views import QuizsterView
     quiz = NS(movie={'actors': 'A', 'description': 'Plot', 'rating': '5', 'genre': 'Drama',
-                     'duration': '120', 'datePublished': '2020-01-01'}, hint='Hint', answer_index=0)
+                     'duration': '120', 'datePublished': '2020-01-01'}, hint='Hint', answer_index=0, options=['A','B','C','D'])
     view = QuizsterView(quiz)
     view.people = {1: [3, 0]}
     view.people_playing = [1]
     view.skips = 1
     view.response = NS(edit=AsyncMock())
-    interaction = NS(user=NS(id=1), response=NS(defer=AsyncMock()), followup=NS(send=AsyncMock()))
-    await view.red.callback(interaction)
+    interaction = NS(user=NS(id=1), response=NS(defer=AsyncMock(), send_message=AsyncMock()), followup=NS(send=AsyncMock()))
+    await view.skip_button.callback(interaction)
     assert view.skipped and view.resolved and view.is_finished()
     assert view.skips == 0 and view.people == {1: [3, 0]}
     await view.compare_answers()
@@ -316,3 +318,65 @@ def test_pixelation_uses_current_pillow_for_valid_rgba_images():
     assert rendered.size == (120, 120)
     assert rendered.getpixel((0, 0))[0] > 240
     result.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('submissions', [{}, {1: 'A brave samosa'}])
+async def test_clash_friends_timeout_does_not_start_a_solo_duel(submissions):
+    module = importlib.import_module('cogs.bollywood')
+    user = NS(id=1, display_name='Player')
+    ctx = NS(author=user, _pippo_play_mode=False,
+             send=AsyncMock(return_value=NS(edit=AsyncMock())))
+    async def expire(view):
+        view.submissions.update(submissions)
+        view.stop()
+        await view.on_timeout()
+    with patch.object(discord.ui.View, 'wait', expire), \
+         patch.object(module, 'clash_art_file', return_value=None), \
+         patch.object(module, 'judge_clash', AsyncMock()) as judge:
+        await module.Games.ai_clash.callback(module.Games(NS()), ctx)
+    judge.assert_not_awaited()
+    message = ctx.send.return_value
+    assert 'expired' in message.edit.call_args.kwargs['embed'].title
+    if submissions:
+        assert 'Play solo' in message.edit.call_args.kwargs['embed'].description
+
+
+@pytest.mark.asyncio
+async def test_openrouter_standard_privacy_mode_allows_selected_provider_policy(monkeypatch):
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENROUTER_MODEL', 'meta/muse-spark-1.3-contributor')
+    monkeypatch.setenv('OPENROUTER_PRIVACY_MODE', 'standard')
+    body = json.dumps({'choices': [{'message': {'content': json.dumps({'winner': 1, 'reason': 'A'})}}]}).encode()
+    async def chunks(size):
+        yield body
+    response = NS(status=200, content_length=len(body), content=NS(iter_chunked=chunks))
+    session = MagicMock()
+    session.post.return_value.__aenter__ = AsyncMock(return_value=response)
+    with patch('utils.clash.aiohttp.ClientSession') as client:
+        client.return_value.__aenter__ = AsyncMock(return_value=session)
+        await judge_clash(NS(display_name='First'), 'A', NS(display_name='Second'), 'B')
+    request = session.post.call_args.kwargs['json']
+    assert request['model'] == 'meta/muse-spark-1.3-contributor'
+    assert request['provider'] == {'require_parameters': True}
+
+
+@pytest.mark.asyncio
+async def test_application_command_tree_serializes_with_discord_description_limits():
+    from bot import PippoBot, cogs, load_cogs
+    bot = PippoBot()
+    await bot._async_setup_hook()
+    await load_cogs(bot, cogs)
+    commands_json = [command.to_dict(bot.tree) for command in bot.tree.get_commands()]
+    def validate(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == 'description' and isinstance(value, str):
+                    assert len(value) <= 100, f'{node.get("name", "command")}: {len(value)} character description'
+                validate(value)
+        elif isinstance(node, list):
+            for value in node:
+                validate(value)
+    for command in commands_json:
+        validate(command)
+    await bot.close()

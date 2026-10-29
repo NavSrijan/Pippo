@@ -33,16 +33,24 @@ class Schedules(commands.Cog):
     async def ping(self, ctx):
         start = time.perf_counter()
         message = await ctx.send("Ping...")
-        end = time.perf_counter()
-        duration = (end - start) * 1000
-        await message.edit(content='Pong! {:.2f}ms'.format(duration))
+        response_ms = (time.perf_counter() - start) * 1000
+        gateway_ms = self.bot.latency * 1000
+        await message.edit(
+            content=f"Pong! Gateway: **{gateway_ms:.0f} ms** · Command response: **{response_ms:.0f} ms**"
+        )
 
     @commands.hybrid_group(name="signup")
     async def signup(self, ctx):
-        """Signup for various commands."""
+        """Manage your opt-in Pippo greeting preferences."""
         if ctx.invoked_subcommand is None:
-            await ctx.send("Not a valid command.")
+            await ctx.reply("Choose the greeting times you want with `/signup greetings` (or `.signup greetings`).")
 
+    @app_commands.describe(
+        good_morning="Receive Pippo's 6:00 AM IST greeting",
+        good_afternoon="Receive Pippo's 1:00 PM IST greeting",
+        good_evening="Receive Pippo's 5:00 PM IST greeting",
+        good_night="Receive Pippo's 10:00 PM IST greeting",
+    )
     @signup.command(name="greetings")
     async def greet(self, ctx,
                     good_morning: bool = False,
@@ -57,7 +65,18 @@ class Schedules(commands.Cog):
                                           ga=good_afternoon,
                                           ge=good_evening,
                                           gn=good_night)
-        await ctx.reply("You are signed up!")
+        selected = [
+            label for enabled, label in (
+                (good_morning, "morning"),
+                (good_afternoon, "afternoon"),
+                (good_evening, "evening"),
+                (good_night, "night"),
+            ) if enabled
+        ]
+        if selected:
+            await ctx.reply(f"Pippo will send you the following daily greetings by DM: {', '.join(selected)}.")
+        else:
+            await ctx.reply("All greeting preferences are off. You won't receive greeting DMs.")
 
     async def _send_greeting(self, cmd, text):
         try:

@@ -23,6 +23,7 @@ from utils.bollywood_utils import (
     pixelate_image,
 )
 from views import TicTacToeView
+from cogs.fun import Fun
 # ---------------------------------------------------------------------------
 # 1. Cog Loading & Command Tree Test
 # ---------------------------------------------------------------------------
@@ -217,44 +218,89 @@ def test_bollywood_backend():
 
     # Test quiz question generators
     q_ma = Quiz_Question.MA(backend.get_random_movie)
-    assert len(q_ma.options) == 4
-    assert q_ma.answer_index in [0, 1, 2, 3]
+    assert 2 <= len(q_ma.options) <= 4
+    assert len(set(q_ma.options)) == len(q_ma.options)
+    assert q_ma.options[q_ma.answer_index] == q_ma.answer
 
     q_am = Quiz_Question.AM(backend.get_random_movie)
-    assert len(q_am.options) == 4
-    assert q_am.answer_index in [0, 1, 2, 3]
+    assert 2 <= len(q_am.options) <= 4
+    assert len(set(q_am.options)) == len(q_am.options)
+    assert q_am.options[q_am.answer_index] == q_am.answer
 
     q_ym = Quiz_Question.YM(backend.get_random_movie)
-    assert len(q_ym.options) == 4
-    assert q_ym.answer_index in [0, 1, 2, 3]
+    assert 2 <= len(q_ym.options) <= 4
+    assert len(set(q_ym.options)) == len(q_ym.options)
+    assert q_ym.options[q_ym.answer_index] == q_ym.answer
 
 
 def test_bollywood_string_normalization():
     assert normalize_string("Dilwale Dulhania Le Jayenge") == "dilwaledulhanialejayenge"
     assert normalize_string("3 Idiots!") == "3idiots"
 
-    template = get_text_after_substitution("Don", "dn")
-    assert "D" in template or "d" in template
-    assert "n" in template
-    assert "\\_" in template
+    assert get_text_after_substitution("Taare Zameen Par", "ae") == r"\_aa\_e \_a\_ee\_ \_a\_"
+    assert get_text_after_substitution("Taare Zameen Par", "ae", escape=False) == "_aa_e _a_ee_ _a_"
+
+
+def test_ship_score_is_pair_specific_and_rerollable():
+    first, second = "Alice", "Bob"
+    score = Fun._ship_score(first, second)
+    assert 0 <= score <= 100
+    assert Fun._ship_score(second, first) == score
+    assert Fun._ship_score("Carol", "Dave") != score
+    assert Fun._ship_score(first, second, reroll=1) != score
+
+
+def test_game_captions_use_dynamic_space_below_uncovered_art(tmp_path):
+    source = tmp_path / "caption_art.png"
+    Image.new("RGB", (400, 200), (255, 249, 235)).save(source)
+    caption = "A tie! Everyone completed all five lines together on the same number call."
+    attachment = functions.write_caption_on_image(source, "Bingo tie!", caption)
+    try:
+        with Image.open(attachment.fp) as rendered:
+            assert rendered.width == 400
+            assert rendered.height > 200 + 112
+            assert rendered.getpixel((200, 40))[0] > 240
+            panel_color = rendered.getpixel((200, 230))
+            assert all(abs(actual - expected) <= 5 for actual, expected in zip(panel_color, (24, 17, 49)))
+            assert any(
+                r > 220 and g > 210 and b > 200
+                for y in range(220, rendered.height - 12)
+                for x in range(20, rendered.width - 20)
+                for r, g, b in [rendered.getpixel((x, y))]
+            )
+    finally:
+        attachment.close()
+
+
+def test_movie_mask_is_centered_in_contrast_band_below_art(tmp_path):
+    source = tmp_path / "art.png"
+    Image.new("RGB", (400, 200), (255, 249, 235)).save(source)
+    attachment = functions.write_text_on_image(source, "_aa_e _a_ee_ _a_")
+    try:
+        with Image.open(attachment.fp) as rendered:
+            assert rendered.size == (400, 384)
+            panel_color = rendered.getpixel((200, 220))
+            assert all(abs(actual - expected) <= 4 for actual, expected in zip(panel_color, (27, 37, 58)))
+            assert rendered.getpixel((200, 80))[0] > 240
+            assert any(
+                r > 220 and g > 200 and b > 170
+                for y in range(230, 360)
+                for x in range(70, 330)
+                for r, g, b in [rendered.getpixel((x, y))]
+            )
+    finally:
+        attachment.close()
 
 
 @pytest.mark.asyncio
 async def test_deposit_score():
     bot = MagicMock()
     bot.db = MagicMock()
-    bot.db.bollywoodHangmanDB.update_score = AsyncMock()
-    bot.db.plotsterDB.update_score = AsyncMock()
-    bot.db.coins.add_coins = AsyncMock()
-
-    # Bollywood score
+    bot.db.award_movie_score = AsyncMock()
     await deposit_score(bot, {111: 5}, 10, "bollywood")
-    bot.db.bollywoodHangmanDB.update_score.assert_called_once_with(111, 5, 10)
-    bot.db.coins.add_coins.assert_called_once_with(111, coins=25)
-
-    # Plotster score
+    bot.db.award_movie_score.assert_awaited_once_with(111, 5, 10, "bollywood")
     await deposit_score(bot, {222: 8}, 8, "plotster")
-    bot.db.plotsterDB.update_score.assert_called_once_with(222, 8, 8)
+    assert bot.db.award_movie_score.call_args.args == (222, 8, 8, "plotster")
 
 
 def test_pixelate_image_fallback():
@@ -514,5 +560,3 @@ async def test_info_owner_commands():
     await cog.syncservers.callback(cog, ctx)
     mock_bot.db.servers.ensure_server.assert_called_once_with(222, ".")
     ctx_send.assert_called_once()
-
-

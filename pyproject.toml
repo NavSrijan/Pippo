@@ -9,7 +9,7 @@ dynamic = ["dependencies"]
 dependencies = {file = ["requirements.txt"]}
 
 [tool.setuptools]
-py-modules = ["bot", "database", "flood", "functions", "views", "config"]
+py-modules = ["bot", "database", "flood", "functions", "views", "config", "runtime"]
 
 [tool.setuptools.packages.find]
 include = ["cogs*", "utils*"]

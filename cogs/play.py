@@ -19,8 +19,9 @@ GAME_OPTIONS = [
     ("memory", "Match all eight card pairs", "🃏"),
     ("flood", "Capture the most board territory", "🌈"),
     ("clash", "AI judged creative battle", "⚔️"),
-    ("woof", "Guess the dog breed", "🐶"),
-    ("meow", "Guess the cat breed", "🐱"),
+    ("npat", "Name, place, animal, thing", "📝"),
+    ("woof", "Five dog-breed photo rounds with a shared score", "🐶"),
+    ("meow", "Five cat-breed photo rounds with a shared score", "🐱"),
     ("onewordstory", "Build a story one word at a time", "✍️"),
 ]
 GAME_TITLES = {
@@ -34,16 +35,38 @@ GAME_TITLES = {
     "memory": "Memory Match",
     "flood": "Flood",
     "clash": "Clash of Creations",
+    "npat": "Name Place Animal Thing",
     "woof": "Dog Breed Quiz",
     "meow": "Cat Breed Quiz",
     "onewordstory": "One Word Story",
 }
 GAME_CATEGORIES = {
     "movies": ("Movie Games", "🎬", {"bollywood", "hollywood", "plotster", "quizster", "poster"}),
-    "party": ("Party Games", "🎉", {"bingo", "tictactoe", "memory", "flood", "clash"}),
+    "party": ("Party Games", "🎉", {"bingo", "tictactoe", "memory", "flood", "clash", "npat"}),
     "animals": ("Animal Quizzes", "🐾", {"woof", "meow"}),
     "social": ("Social Games", "✍️", {"onewordstory"}),
 }
+
+
+async def offer_game_mode(ctx, game_name, **options):
+    if hasattr(ctx, "_pippo_play_mode"):
+        return False
+    view = PlayMenuView(ctx.bot, ctx)
+    view.selected_game = game_name
+    view.launch_options = options
+    view.selected_opponent = options.get("opponent")
+    if view.selected_opponent is not None and (
+        view.selected_opponent.id == ctx.author.id or view.selected_opponent.bot
+    ):
+        view.selected_opponent = None
+    # A direct game command already identifies the game; only mode buttons remain.
+    view.remove_item(view.game_select)
+    view.remove_item(view.select_category)
+    if game_name not in {"tictactoe", "memory"}:
+        view.remove_item(view.opponent_select)
+    view.message = await ctx.send(view.menu_text(), view=view)
+    ctx._pippo_menu_only = True
+    return True
 
 
 class PlayMenuView(discord.ui.View):
@@ -52,9 +75,11 @@ class PlayMenuView(discord.ui.View):
         self.bot = bot
         self.ctx = ctx
         self.author_id = ctx.author.id
+        self._launching = False
         self.selected_category = None
         self.selected_game = None
         self.selected_opponent = None
+        self.launch_options = {}
         self.game_select = discord.ui.Select(
             placeholder="Choose a category first",
             min_values=1,
@@ -97,11 +122,7 @@ class PlayMenuView(discord.ui.View):
             await interaction.response.send_message("Choose another person from this server.", ephemeral=True)
             return
         self.selected_opponent = opponent
-        self.stop()
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content=f"Starting {GAME_TITLES[self.selected_game]} against {opponent.mention}…", view=self)
-        await self.launch(solo=False, opponent=opponent)
+        await self.start_mode(interaction, solo=False)
 
     async def launch(self, solo: bool, opponent=None):
         name = self.selected_game
@@ -116,17 +137,17 @@ class PlayMenuView(discord.ui.View):
         # /play interaction token expiring during a long game.
         game_ctx = copy(self.ctx)
         game_ctx.interaction = None
+        # Slash contexts contain a synthetic message ID, never a reply target.
+        game_ctx.reply = game_ctx.send
         game_ctx.command = command
         game_ctx.invoked_with = name
         game_ctx.command_failed = False
         game_ctx.args = []
         game_ctx.kwargs = {}
-        if name in {"bollywood", "hollywood", "plotster", "quizster", "poster"}:
-            arguments = f"solo: {solo}"
-        elif name in {"tictactoe", "memory"}:
-            arguments = f"<@{opponent.id}>" if opponent else ""
-        else:
-            arguments = str(solo)
+        game_ctx._pippo_play_mode = solo
+        game_ctx._pippo_menu_only = False
+        game_ctx._pippo_options = {**self.launch_options, "opponent": None if solo else opponent}
+        arguments = ""
         game_ctx.view = StringView(arguments)
         try:
             await command.invoke(game_ctx)
@@ -136,20 +157,27 @@ class PlayMenuView(discord.ui.View):
             self.bot.dispatch("command_completion", game_ctx)
 
     async def start_mode(self, interaction: discord.Interaction, solo: bool):
+        if self._launching or self.is_finished():
+            await interaction.response.send_message("This game menu has already been used. Open another to play again.", ephemeral=True)
+            return
         if not self.selected_game:
             await interaction.response.send_message("Choose a game first.", ephemeral=True)
             return
-        if not solo and self.selected_game in {"tictactoe", "memory"}:
+        if not solo and self.ctx.guild is None:
+            await interaction.response.send_message("Play with friends needs a server channel. Choose Play solo here.", ephemeral=True)
+            return
+        if not solo and self.selected_game in {"tictactoe", "memory"} and self.selected_opponent is None:
             self.opponent_select.disabled = False
             await interaction.response.edit_message(content="Choose the person you want to challenge:", view=self)
             return
 
+        self._launching = True
         self.stop()
         for child in self.children:
             child.disabled = True
         mode = "solo" if solo else "with friends"
         await interaction.response.edit_message(content=f"Starting {GAME_TITLES[self.selected_game]} {mode}…", view=self)
-        await self.launch(solo=solo)
+        await self.launch(solo=solo, opponent=self.selected_opponent)
 
     @discord.ui.select(
         placeholder="Select a category...",

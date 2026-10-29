@@ -1,4 +1,5 @@
 import csv
+import asyncio
 from discord.ext import commands
 import discord
 
@@ -30,10 +31,15 @@ class ShowDropdown(discord.ui.Select):
         if interaction.user.id != self.view.author_id:
             await interaction.response.send_message("This shop session is not for you. Open your own using `/shop character`.", ephemeral=True)
             return
+        show = self.values[0]
         await interaction.response.defer()
-        view2 = CharacterView(self.view.bot, self.values[0], self.data, author_id=self.view.author_id)
-        await self.view.out.edit(view=view2)
-        view2.out = self.view.out
+        async with self.view.lock:
+            if self.view.is_finished():
+                return
+            self.view.stop()
+            view2 = CharacterView(self.view.bot, show, self.data, author_id=self.view.author_id)
+            await self.view.out.edit(view=view2)
+            view2.out = self.view.out
         
 class ShowNavButton(discord.ui.Button):
 
@@ -53,6 +59,8 @@ class ShowNavButton(discord.ui.Button):
             self.view.current_page+=1
         else:
             self.view.current_page-=1
+
+        self.view.current_page = max(0, min(self.view.max_page - 1, self.view.current_page))
 
         if self.view.current_page >= self.view.max_page-1:
             self.view.children[2].disabled=True
@@ -77,12 +85,14 @@ class ShowView(discord.ui.View):
         self.show_names = self.split_list(show_names)
         self.data = data
 
+        self.lock = asyncio.Lock()
         self.max_page = len(self.show_names)
         self.current_page = 0
 
         self.add_item(ShowDropdown(self.show_names[self.current_page], self.data))
         self.add_item(ShowNavButton("<", forward=False))
         self.add_item(ShowNavButton(">", forward=True))
+        self.children[2].disabled = self.max_page <= 1
 
     def split_list(self, lst):
         sublists = []
@@ -102,22 +112,28 @@ class CharacterDropdown(discord.ui.Select):
         for character in character_names:
             options.append(discord.SelectOption(label=character))
 
-        super().__init__(placeholder='Choose your preferred character.', min_values=1, max_values=1, options=options)
+        super().__init__(placeholder='Choose a character · 1,000 coins', min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.view.author_id:
             await interaction.response.send_message("This shop session is not for you.", ephemeral=True)
             return
+        selected = self.values[0]
         await interaction.response.defer()
-        cost = 1000
-        coins_data = await self.view.bot.db.coins.get_amount_coins(interaction.user.id)
-        coins = coins_data.get('coins', 0) if isinstance(coins_data, dict) else coins_data['coins']
-        if coins>=cost:
-            await self.view.bot.db.coins.deduct_coins(interaction.user.id, cost)
-            await self.view.bot.db.characters.insert_character(interaction.user.id, self.view.show_name, self.values[0])
-            await self.view.out.edit(content=f"Your character has been changed to **{self.values[0]}**!", view=None)
-        else:
-            await self.view.out.edit(content="You sadly don't have enough coins. You need 1000 coins.", view=None)
+        async with self.view.lock:
+            if self.view.completed or self.view.is_finished():
+                await interaction.followup.send("This purchase has already been processed. Open a new shop to choose again.", ephemeral=True)
+                return
+            purchased = await self.view.bot.db.characters.purchase_cartoon_character(
+                interaction.user.id, self.view.show_name, selected, cost=1000
+            )
+            self.view.completed = True
+            self.view.stop()
+            if purchased:
+                text = f"Your character has been changed to **{discord.utils.escape_markdown(selected)}**!"
+            else:
+                text = "You don't have enough coins for that character. You need 1,000 coins."
+            await self.view.out.edit(content=text, view=None)
 
 class CharacterView(discord.ui.View):
 
@@ -128,6 +144,8 @@ class CharacterView(discord.ui.View):
         self.author_id = author_id
         self.show_name = show_name
         self.data = data
+        self.lock = asyncio.Lock()
+        self.completed = False
         self.character_names = self.fetch_characters_by_show()
 
         self.add_item(CharacterDropdown(self.character_names))
@@ -137,7 +155,7 @@ class CharacterView(discord.ui.View):
         for entry in self.data:
             if entry['show_name'] == self.show_name:
                 characters.append(entry['character_name'])
-        return characters
+        return list(dict.fromkeys(characters))
 
 
 class Shop(commands.Cog):
@@ -170,4 +188,3 @@ class Shop(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Shop(bot))
-

@@ -356,6 +356,28 @@ class Characters(Database):
             user_id, show_name, cartoon_character, dog_breed, cat_breed,
         )
 
+    async def purchase_cartoon_character(self, user_id, show_name, cartoon_character, cost=1000):
+        """Charge for and save a cartoon identity as one atomic purchase."""
+        if cost <= 0:
+            return False
+        async with self.pool.acquire() as con:
+            async with con.transaction():
+                debited = await con.fetchval(
+                    "UPDATE points SET coins = coins - $1 "
+                    "WHERE user_id = $2 AND coins >= $1 RETURNING user_id;",
+                    cost, user_id,
+                )
+                if debited is None:
+                    return False
+                await con.execute(
+                    "INSERT INTO characters (user_id, show_name, cartoon_character) "
+                    "VALUES ($1, $2, $3) ON CONFLICT (user_id) DO UPDATE SET "
+                    "show_name = EXCLUDED.show_name, "
+                    "cartoon_character = EXCLUDED.cartoon_character;",
+                    user_id, show_name, cartoon_character,
+                )
+        return True
+
     async def update_character(self, user_id, show_name=None, cartoon_character=None, dog_breed=None, cat_breed=None):
         """Update the details of a character entry in the table"""
         update_fields = []
@@ -405,4 +427,19 @@ class DB(Database):
         self.coins = Coins(pool)
         self.characters = Characters(pool)
     
-
+    async def award_movie_score(self, user_id, points, rounds, game_type):
+        """Keep a game's score and its coin reward together under concurrent writes."""
+        table = "plotster_points" if game_type == "plotster" else "bollywood_points"
+        async with self.pool.acquire() as con:
+            async with con.transaction():
+                await con.execute(
+                    f"INSERT INTO {table} (user_id, points, rounds) VALUES ($1, $2, $3) "
+                    f"ON CONFLICT (user_id) DO UPDATE SET points = COALESCE({table}.points, 0) + EXCLUDED.points, "
+                    f"rounds = COALESCE({table}.rounds, 0) + EXCLUDED.rounds;",
+                    user_id, points, rounds,
+                )
+                await con.execute(
+                    "INSERT INTO points (user_id, coins) VALUES ($1, $2) "
+                    "ON CONFLICT (user_id) DO UPDATE SET coins = points.coins + EXCLUDED.coins;",
+                    user_id, 5 * points,
+                )

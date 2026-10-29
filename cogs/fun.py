@@ -1,18 +1,31 @@
+from runtime import http_session
+from cogs.play import offer_game_mode
+from runtime import react, run_blocking
 from typing import Literal
 import datetime
 import time
 import random
+import hashlib
 import re
 import json
 import asyncio
+import html
 import csv
-import hashlib
+import logging
 from io import BytesIO
+from urllib.parse import urlsplit
 from PIL import Image, ImageDraw, ImageOps
+import aiohttp
 
 from discord.ext import commands
 import discord
-from views import ShipView
+from views import (
+    ShipView, FlamesView, OneWordStoryLobbyView, CartoonRouletteView, EightBallView,
+    DefinitionBrowserView, onewordstory_art_file, ship_art_file,
+    cartoon_art_file, eightball_art_file, what_art_file,
+)
+
+log = logging.getLogger(__name__)
 
 def load_csv(filename):
     data = []
@@ -21,6 +34,22 @@ def load_csv(filename):
         for row in reader:
             data.append(dict(row))
     return data
+
+
+def usable_cartoon_records(characters):
+    """Return one usable image record for each character/show pair."""
+    records = []
+    seen = set()
+    for character in characters:
+        name = (character.get("character_name") or "").strip()
+        show = (character.get("show_name") or "").strip()
+        image_url = (character.get("image_link") or "").strip()
+        parsed = urlsplit(image_url)
+        key = (name.casefold(), show.casefold())
+        if name and show and parsed.scheme in {"http", "https"} and parsed.netloc and key not in seen:
+            records.append({**character, "character_name": name, "show_name": show, "image_link": image_url})
+            seen.add(key)
+    return records
 
 class Fun(commands.Cog):
     """Fun commands"""
@@ -33,10 +62,13 @@ class Fun(commands.Cog):
                                    user1,
                                    user2,
                                    heart=True) -> discord.File:
-        # Get the avatar images of both users
         bytes1, bytes2 = await asyncio.gather(
             user1.display_avatar.read(), user2.display_avatar.read()
         )
+        return await run_blocking(self._render_avatars, bytes1, bytes2, heart)
+
+    @staticmethod
+    def _render_avatars(bytes1, bytes2, heart):
         image1 = Image.open(BytesIO(bytes1)).convert('RGBA')
         image2 = Image.open(BytesIO(bytes2)).convert('RGBA')
 
@@ -46,39 +78,88 @@ class Fun(commands.Cog):
             heart_path = "imgs/bheart.png"
         heart = Image.open(heart_path).convert('RGBA')
 
-        # Resize images to a common size
-        size = (min(image1.size[0], image2.size[0]), min(image1.size[1], image2.size[1]))
-        image1 = image1.resize(size)
-        image2 = image2.resize(size)
-
-        # Create circular masks
-        mask = Image.new('L', size, 0)
-        draw = ImageDraw.Draw(mask)
-        draw.ellipse((0, 0) + size, fill=255)
-
-        # Apply masks to images
+        size = 512
+        image1 = ImageOps.fit(image1, (size, size), method=Image.Resampling.LANCZOS)
+        image2 = ImageOps.fit(image2, (size, size), method=Image.Resampling.LANCZOS)
+        mask = Image.new('L', (size, size), 0)
+        ImageDraw.Draw(mask).ellipse((4, 4, size - 4, size - 4), fill=255)
         image1.putalpha(mask)
         image2.putalpha(mask)
 
-        # Calculate center position for heart
-        heart_size = (size[0] // 2, size[1] // 2)
-        heart_position = (size[0] - heart_size[0] // 2,
-                          size[1] // 2 - heart_size[1] // 2)
-
-        # Resize heart image and paste it onto the combined image
-        heart = heart.resize(heart_size)
-        combined = Image.new('RGBA', (size[0] * 2, size[1]),
-                             (255, 255, 255, 255))
-        combined.paste(image1, (0, 0))
-        combined.paste(image2, (size[0], 0))
-        combined.paste(heart, heart_position, mask=heart)
+        heart_size = (176, 176)
+        heart = ImageOps.contain(heart, heart_size, method=Image.Resampling.LANCZOS)
+        heart_position = (size - heart.width // 2, (size - heart.height) // 2)
+        combined = Image.new('RGBA', (size * 2, size), (30, 25, 58, 255))
+        combined.paste(image1, (0, 0), image1)
+        combined.paste(image2, (size, 0), image2)
+        combined.alpha_composite(heart, heart_position)
 
         result = combined.convert('RGB')
 
-        with BytesIO() as output:
-            result.save(output, format='JPEG', quality=20, optimize=True)
-            output.seek(0)
-            return discord.File(output, filename='avatar.jpg')
+        output = BytesIO()
+        result.save(output, format='JPEG', quality=88, optimize=True, progressive=True)
+        output.seek(0)
+        return discord.File(output, filename='avatar.jpg')
+
+    @staticmethod
+    def _ship_label(target):
+        value = getattr(target, 'display_name', str(target)).strip() or "Mystery"
+        return discord.utils.escape_markdown(value[:72]).replace("@", "@\u200b")
+
+    @staticmethod
+    def _ship_identity(target):
+        user_id = getattr(target, "id", None)
+        if user_id is not None:
+            return f"id:{user_id}"
+        return f"name:{str(target).strip().casefold()}"
+
+    @classmethod
+    def _ship_score(cls, first, second, *, reroll=0):
+        """Give each pair a repeatable score, with fresh readings on reroll."""
+        pair = sorted((cls._ship_identity(first), cls._ship_identity(second)))
+        seed = "\0".join((*pair, f"reroll:{reroll}")).encode("utf-8")
+        digest = hashlib.blake2s(seed, digest_size=8, person=b"pipposhp").digest()
+        return int.from_bytes(digest, "big") % 101
+
+    async def make_ship_result(self, first, second, *, reroll=0):
+        score = self._ship_score(first, second, reroll=reroll)
+        tiers = (
+            (20, "Chaotic besties", "A legendary duo for snacks, schemes, and questionable plans."),
+            (40, "Friendly sparks", "This pairing has a cozy sitcom energy."),
+            (60, "Cute chemistry", "A little spark is there. Pippo recommends sharing fries."),
+            (80, "Rom-com material", "Someone cue the accidental umbrella scene."),
+            (95, "Power couple", "Matching jackets would be a reasonable next step."),
+            (101, "Pippo-approved soulmates", "The universe made room for one more adorable duo."),
+        )
+        mood, verdict = next((mood, text) for ceiling, mood, text in tiers if score < ceiling)
+        filled = round(score / 10)
+        bar = "💗" * filled + "🤍" * (10 - filled)
+        first_label, second_label = self._ship_label(first), self._ship_label(second)
+        left = first_label[:max(1, (len(first_label) + 1) // 2)]
+        right = second_label[len(second_label) // 2:]
+        ship_name = (left + right).strip() or "A cute duo"
+        embed = discord.Embed(
+            title=f"💘 {ship_name[:120]}",
+            description=(
+                f"{bar}\n**{score}% · {mood}**\n\n{verdict}\n\n"
+                f"{first_label} + {second_label}"
+            ),
+            color=discord.Color.magenta(),
+        )
+        embed.set_footer(text="For fun only · no compatibility science involved" + (f" · reading {reroll + 1}" if reroll else ""))
+
+        files = []
+        artwork = await run_blocking(ship_art_file, embed, f"ship_scene_{reroll + 1}")
+        if artwork:
+            files.append(artwork)
+        if hasattr(first, "display_avatar") and hasattr(second, "display_avatar"):
+            try:
+                avatar_art = await self.avatar_concatenation(first, second, heart=score >= 50)
+                embed.set_image(url="attachment://avatar.jpg")
+                files.append(avatar_art)
+            except Exception:
+                log.exception("Could not compose ship avatars")
+        return embed, files
 
     @commands.cooldown(1, 3, commands.BucketType.user)
     @commands.hybrid_command(name="ship")
@@ -86,156 +167,151 @@ class Fun(commands.Cog):
                    ctx,
                    user1 = None,
                    user2 = None):
-        """Ship command to ship people"""
-        user_regex = r'<@!?(\d+)>'
-        if user1 is not None and isinstance(user1, str):
-            m1 = re.match(user_regex, user1)
-            if m1 is not None and ctx.guild:
-                fetched = ctx.guild.get_member(int(m1.group(1)))
-                if fetched:
-                    user1 = fetched
-        if user2 is not None and isinstance(user2, str):
-            m2 = re.match(user_regex, user2)
-            if m2 is not None and ctx.guild:
-                fetched = ctx.guild.get_member(int(m2.group(1)))
-                if fetched:
-                    user2 = fetched
+        """Get a playful compatibility reading for two names or members."""
+        supplied_first = user1 is not None
+        user_regex = re.compile(r"<@!?(\d+)>")
 
+        async def resolve_target(value):
+            if not isinstance(value, str):
+                return value
+            value = value.strip()
+            match = user_regex.fullmatch(value)
+            if match and ctx.guild:
+                member = ctx.guild.get_member(int(match.group(1)))
+                if member:
+                    return member
+                try:
+                    return await self.bot.fetch_user(int(match.group(1)))
+                except (discord.NotFound, discord.HTTPException):
+                    return value[:72]
+            return value[:72] or "Mystery"
+
+        user1 = await resolve_target(user1)
+        user2 = await resolve_target(user2)
         if user1 is None:
             user1 = ctx.author
-        elif user1 is not None and user2 is None:
-            user2 = user1
-            user1 = ctx.author
-        if user2 is None:
-            if ctx.guild and len(ctx.guild.members) > 1:
-                members_pool = [m for m in ctx.guild.members if m.id != user1.id]
-                user2 = random.choice(members_pool) if members_pool else ctx.author
-            else:
-                user2 = "Pippo"
+        if user2 is None and supplied_first:
+            user2, user1 = user1, ctx.author
+        elif user2 is None:
+            members = [member for member in getattr(ctx.guild, "members", []) if not member.bot and member.id != getattr(user1, "id", None)]
+            user2 = random.choice(members) if members else "Pippo"
 
-        def hash_comp(a="Ram", b="Shyam"):
-            h1 = int(hashlib.md5(a.encode()).hexdigest(), 16)
-            h2 = int(hashlib.md5(b.encode()).hexdigest(), 16)
-
-            total = h1 + h2
-            percentage = total % 101
-
-            return percentage
-
-        u1 = getattr(user1, 'display_name', str(user1))
-        u2 = getattr(user2, 'display_name', str(user2))
-
-        score = hash_comp(u1, u2)
-        heart = score >= 50
-
-        words = [
-            'Apathetic 😐', 'Apathetic 😐', '🤷 Disinterested', '🙄 Polite',
-            '😊 Caring', '❤️ Affectionate', '💕 Devoted', '🙌 Adoring',
-            '😍 Passionate', '🔥 Enamored', '💞 Soulmates'
-        ]
-
-        filled = [
-            '<:h1:1103886857365893180>', '<:h1:1103886857365893180>',
-            '<:h2:1103888875807584256>', '<:h3:1103888922653753405>',
-            '<:h4:1103888918828564570>', '<:h5:1103888914743304262>',
-            '<:h6:1103888910507061249>', '<:h7:1103888908250529933>',
-            '<:h8:1103888904349814854>', '<:h9:1103888900352655420>',
-            '<:h10:1103888897567629363>'
-        ]
-
-        empty = "⬜️"
-        combined_name = ":butterfly: " + u1[:max(1, len(u1) // 2)] + u2[len(u2) // 2:]
-        names = f":maple_leaf:`{u1}`\n:maple_leaf:`{u2}`\n"
-        idx = min(10, max(0, int(round(score, -1) / 10)))
-        desc = f"{int(score)}% " + idx * filled[idx] + (10 - idx) * empty + f" {words[idx]}"
-
-        if not isinstance(user1, str) and not isinstance(user2, str):
-            try:
-                file = await self.avatar_concatenation(user1, user2, heart=heart)
-                emb = discord.Embed(title=combined_name, description=desc, color=discord.Color.magenta())
-                emb.set_image(url='attachment://avatar.jpg')
-                view = ShipView(self.bot, ctx)
-                msg = await ctx.send(names, embed=emb, file=file, view=view)
-                view.out = msg
-            except Exception:
-                emb = discord.Embed(title=combined_name, description=desc, color=discord.Color.magenta())
-                await ctx.send(names, embed=emb)
-        else:
-            emb = discord.Embed(title=combined_name, description=desc, color=discord.Color.magenta())
-            await ctx.send(names, embed=emb)
+        embed, files = await self.make_ship_result(user1, user2)
+        view = ShipView(self, ctx, user1, user2)
+        options = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+        if files:
+            options["files"] = files
+        view.out = await ctx.send(**options)
 
     @commands.hybrid_command(name="laser")
+    @commands.max_concurrency(1, per=commands.BucketType.member, wait=False)
     async def laser(self, ctx, user: discord.Member = None):
-        """Laser strike animation against a mentioned user"""
+        """Watch a slow emoji laser strike reveal through edits to one message."""
         mo = str(self.bot.get_emoji(1011452564195246120) or "🛰️")
         las = str(self.bot.get_emoji(1011452560147746939) or "🔴")
         mol = str(self.bot.get_emoji(1011452558444871731) or "⚡")
         explode = str(self.bot.get_emoji(1011458958046793740) or "💥")
-
-        if user is None:
-            user = ctx.author
-
-        text = f"{user.mention}" + ' ' * (30) + mo
-        msg = await ctx.reply(text)
-
-        for i in range(0, 6):
+        user = user or ctx.author
+        msg = await ctx.reply(user.mention + " " * 30 + mo, allowed_mentions=discord.AllowedMentions.none())
+        try:
+            for step in range(6):
+                await asyncio.sleep(1.5)
+                await msg.edit(
+                    content=user.mention + " " * ((5 - step) * 6) + las * step + mol,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            await msg.edit(content=explode + las * 5 + mol, allowed_mentions=discord.AllowedMentions.none())
             await asyncio.sleep(1.5)
-            text = f"{user.mention}" + ' ' * ((6 - i - 1) * 6) + las * i + mol
-            await msg.edit(content=text)
-        text = f"{explode}" + ' ' * ((6 - 5 - 1) * 6) + las * 5 + mol
-        await msg.edit(content=text)
-        await asyncio.sleep(1.5)
-        text = f"{explode}" + ' ' * (30) + mo + f"\n{ctx.author.mention} annihilated {user.mention}"
-        await msg.edit(content=text)
+            await msg.edit(
+                content=explode + " " * 30 + mo + f"\n{ctx.author.mention} annihilated {user.mention}",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.NotFound:
+            # The animation message was deleted; don't recreate it or keep editing.
+            return
 
     @commands.cooldown(1, 3, commands.BucketType.user)
     @commands.hybrid_command(name="cartoon")
     async def cartoon(self, ctx):
-        """Gets a random cartoon image"""
+        """Draw a random cartoon character and spin the roulette for more."""
         if not hasattr(self.bot, 'cartoon_characters') or not self.bot.cartoon_characters:
             self.bot.cartoon_characters = load_csv("data/cartoons/character_dataset.csv")
 
-        car = random.choice(self.bot.cartoon_characters)
-        emb = discord.Embed(title=f"**{car['character_name']}** from **{car['show_name']}**", color=discord.Color.dark_purple())
-        emb.set_image(url=car['image_link'])
-        await ctx.reply(embed=emb)
+        characters = usable_cartoon_records(self.bot.cartoon_characters)
+
+        if not characters:
+            await ctx.reply("I couldn't find any cartoon characters with usable images right now. Try again later.")
+            return
+
+        def render_card(character, draw_number):
+            embed = discord.Embed(
+                title=f"Cartoon Roulette · Draw {draw_number}/6",
+                description=f"**{character['character_name']}** from **{character['show_name']}**",
+                color=discord.Color.dark_purple(),
+            )
+            embed.set_image(url=character["image_link"])
+            embed.set_footer(text="Spin again for another character · Only you can use this roulette")
+            artwork = cartoon_art_file(embed, f"cartoon_draw_{draw_number}")
+            return embed, artwork
+
+        first = random.choice(characters)
+        embed, artwork = await run_blocking(render_card, first, 1)
+        view = CartoonRouletteView(ctx.author.id, characters, render_card, first)
+        options = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+        if artwork:
+            options["file"] = artwork
+        view.message = await ctx.reply(**options)
 
     @commands.hybrid_command(name="cartoonme")
     async def cartoonme(self, ctx, user: discord.Member=None):
-        """Which cartoon character are you?"""
+        """See your saved cartoon alter ego or check a friend."""
         if not hasattr(self.bot, 'cartoon_characters') or not self.bot.cartoon_characters:
             self.bot.cartoon_characters = load_csv("data/cartoons/character_dataset.csv")
 
-        def generate_random_number(user_id, n):
-            return random.Random(user_id).randint(0, n)
+        characters = usable_cartoon_records(self.bot.cartoon_characters)
+        if not characters:
+            await ctx.reply("I couldn't find any cartoon characters with usable images right now. Try again later.")
+            return
 
-        def fetch_value(characters, character_name):
-            for character in characters:
-                if character['character_name'] == character_name:
-                    return character
-            return None
+        def default_character(user_id):
+            return characters[random.Random(user_id).randrange(len(characters))]
 
         if user is None:
             user = ctx.author
 
-        idd = user.id
         character_name = await self.bot.db.characters.get_character(user.id)
         if character_name is None:
-            number = generate_random_number(idd, len(self.bot.cartoon_characters)-1)
-            character = self.bot.cartoon_characters[number]
+            character = default_character(user.id)
         else:
-            character = fetch_value(self.bot.cartoon_characters, character_name['cartoon_character'])
-            if not character:
-                number = generate_random_number(idd, len(self.bot.cartoon_characters)-1)
-                character = self.bot.cartoon_characters[number]
+            saved_name = (character_name["cartoon_character"] or "").strip().casefold()
+            saved_show = (character_name["show_name"] or "").strip().casefold()
+            matches = [
+                record for record in characters
+                if record["character_name"].casefold() == saved_name
+                and (not saved_show or record["show_name"].casefold() == saved_show)
+            ]
+            character = matches[0] if matches else default_character(user.id)
 
-        emb = discord.Embed(title=f"{user.display_name} is **{character['character_name']}** from {character['show_name']}", color=discord.Color.gold())
-        emb.set_image(url=character['image_link'])
-        await ctx.reply(embed=emb)
+        name = discord.utils.escape_markdown(user.display_name)
+        character_name = discord.utils.escape_markdown(character["character_name"])
+        show_name = discord.utils.escape_markdown(character["show_name"])
+        emb = discord.Embed(
+            title="Cartoon alter ego",
+            description=f"**{name}** is **{character_name}** from **{show_name}**.",
+            color=discord.Color.gold(),
+        )
+        emb.set_image(url=character["image_link"])
+        emb.set_footer(text="Choose another identity from `/shop character` for 1,000 coins.")
+        artwork = await run_blocking(cartoon_art_file, emb, "cartoonme")
+        options = {"embed": emb, "allowed_mentions": discord.AllowedMentions.none()}
+        if artwork:
+            options["file"] = artwork
+        await ctx.reply(**options)
 
+    @commands.cooldown(1, 3, commands.BucketType.user)
     @commands.hybrid_command(name="8ball")
-    async def _8ball(self, ctx, question: str):
-        """Want to know your fate?"""
+    async def _8ball(self, ctx, *, question: str):
+        """Ask Pippo's 8-ball a question, then shake it up to three more times."""
         responses = [
             "It is certain.", "It is decidedly so.", "Without a doubt.",
             "Yes definitely.", "You may rely on it.", "As I see it, yes.",
@@ -245,159 +321,344 @@ class Fun(commands.Cog):
             "Don't count on it.", "My reply is no.", "My sources say no.",
             "Outlook not so good.", "Very doubtful."
         ]
-        await ctx.reply(f"🎱 **{random.choice(responses)}**")
+        question = question.strip()
+        if not question:
+            await ctx.reply("Ask Pippo's 8-ball a question first.")
+            return
 
-    @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
+        def render_reading(answer, reading):
+            safe_question = discord.utils.escape_markdown(question[:500])
+            embed = discord.Embed(
+                title="Pippo's Magic 8-Ball",
+                description=f"**You asked:** {safe_question}\n\n🔮 **{answer}**",
+                color=discord.Color.from_rgb(83, 57, 151),
+            )
+            embed.set_footer(text=f"Reading {reading}/4 · Just for fun")
+            artwork = eightball_art_file(embed, f"8ball_reading_{reading}")
+            return embed, artwork
+
+        first_answer = random.choice(responses)
+        embed, artwork = await run_blocking(render_reading, first_answer, 1)
+        view = EightBallView(ctx.author.id, question, responses, render_reading, first_answer)
+        options = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+        if artwork:
+            options["file"] = artwork
+        view.message = await ctx.reply(**options)
+
     @commands.hybrid_command(name="onewordstory")
-    async def onewordstory(self, ctx, solo: bool = False):
-        """Make a collaborative one-word story, or set solo to write by yourself."""
-        prefix = await self.bot.get_prefixx(self.bot, ctx.message)
-
-        def instruction_embed():
-            mode = "Only your words will be added." if solo else "Everyone in the channel can contribute."
-            emb = discord.Embed(
-                title="One Word Story",
-                description=f"{mode}\nSend one word at a time. Type `{prefix}end` to finish.",
-                color=discord.Color.blue(),
-            )
-            return emb
-
-        def check(message):
-            return (
-                message.channel == ctx.channel
-                and not message.author.bot
-                and (not solo or message.author.id == ctx.author.id)
-                and len(message.content.strip().split()) == 1
-            )
-
-        await ctx.reply(embed=instruction_embed())
-
-        timeout = 60
-        para = ""
-
-        while True:
+    @commands.max_concurrency(1, per=commands.BucketType.channel, wait=False)
+    async def onewordstory(self, ctx):
+        """Create a story in rotating one-word turns, with solo and twist modes."""
+        if await offer_game_mode(ctx, "onewordstory"):
+            return
+        solo = ctx._pippo_play_mode
+        prefix = ctx.prefix or "."
+        if ctx.message is not None:
             try:
-                msg = await self.bot.wait_for('message', check=check, timeout=timeout)
-                if msg.content.strip().lower() == f"{prefix}end":
+                prefix = await self.bot.get_prefixx(self.bot, ctx.message) or prefix
+            except Exception:
+                pass
+        elif ctx.guild is not None and getattr(self.bot, "db", None):
+            try:
+                prefix = await self.bot.db.servers.fetch_prefix(ctx.guild.id) or prefix
+            except Exception:
+                pass
+        end_command = f"{prefix}end".casefold()
+        player_ids = [ctx.author.id]
+
+        if not solo:
+            lobby = OneWordStoryLobbyView(ctx.author.id, ctx.author.display_name, "One Word Story", max_players=6)
+            lobby.message = await ctx.send(lobby.render(), view=lobby)
+            await lobby.wait()
+            if not lobby.started:
+                return
+            player_ids = list(lobby.joined_ids)
+
+        target_words = 8 if solo else len(player_ids) * 4
+        turn_seconds = 30 if solo else 20
+        host_id = ctx.author.id
+        words = []
+        scores = {user_id: 0 for user_id in player_ids}
+        passes = 0
+        common_letters = "AEBCDFGHLMPRST"
+        end_note = f"<@{host_id}> can type `{prefix}end` to wrap early."
+
+        await ctx.send(
+            f"📖 **One Word Story is live!** {target_words} turns · one word each · "
+            f"{turn_seconds}s per turn. {end_note}",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+        for turn in range(target_words):
+            user_id = player_ids[turn % len(player_ids)]
+            round_number = turn // len(player_ids) + 1
+            constraint = None
+            letter = None
+            if turn > 0 and len(words) and len(words) % 4 == 0:
+                constraint = random.choice(("letter", "long", "y"))
+                if constraint == "letter":
+                    letter = random.choice(common_letters)
+            prompt = {
+                "letter": f" Twist card: start with **{letter}** for **+2 Story Points**.",
+                "long": " Twist card: use **6+ letters** for **+2 Story Points**.",
+                "y": " Twist card: end with **Y** for **+2 Story Points**.",
+            }.get(constraint, "")
+            await ctx.send(
+                f"🗣️ <@{user_id}> — Round **{round_number}**, your word.{prompt}",
+                allowed_mentions=discord.AllowedMentions(users=True, everyone=False, roles=False, replied_user=False),
+            )
+            if words and turn % len(player_ids) == 0:
+                preview = discord.utils.escape_markdown(" ".join(words[-8:])).replace("@", "@\u200b")
+                await ctx.send(f"📖 Story so far: `{preview}`", allowed_mentions=discord.AllowedMentions.none())
+
+            def check(message):
+                if message.channel != ctx.channel or message.author.bot:
+                    return False
+                content = message.content.strip()
+                if message.author.id == host_id and content.casefold() == end_command:
+                    return True
+                if message.author.id != user_id or content.startswith(prefix):
+                    return False
+                return len(content.split()) == 1 and len(content) <= 32
+
+            deadline = time.monotonic() + turn_seconds
+            accepted_word = None
+            ended_early = False
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     break
-                para += f" {msg.content.strip()}"
                 try:
-                    await msg.add_reaction("\U0001F39F")
-                except Exception:
+                    msg = await self.bot.wait_for("message", check=check, timeout=remaining)
+                except asyncio.TimeoutError:
+                    break
+                if msg.author.id == host_id and msg.content.strip().casefold() == end_command:
+                    ended_early = True
+                    break
+
+                word = msg.content.strip()
+                lower_word = word.casefold()
+                letters_in_word = "".join(character for character in lower_word if character.isalpha())
+                meets_twist = (
+                    constraint is None
+                    or (constraint == "letter" and letters_in_word.startswith(letter.casefold()))
+                    or (constraint == "long" and len(letters_in_word) >= 6)
+                    or (constraint == "y" and letters_in_word.endswith("y"))
+                )
+                if not meets_twist:
+                    hint = {
+                        "letter": f"Your twist card needs a word starting with **{letter}**. Try again before the timer ends.",
+                        "long": "Your twist card needs at least **6 letters**. Try again before the timer ends.",
+                        "y": "Your twist card needs to end with **Y**. Try again before the timer ends.",
+                    }[constraint]
+                    await react(msg, "❔")
+                    continue
+                accepted_word = word
+                try:
+                    await react(msg, "✍️")
+                except discord.HTTPException:
                     pass
-            except asyncio.exceptions.TimeoutError:
-                await ctx.send("Story timeout! Looks like the session has ended.")
                 break
 
-        final_text = para.strip() if para.strip() else "No story was written!"
-        await ctx.channel.send(embed=discord.Embed(title="The final paragraph", description=final_text, color=discord.Color.green()))
+            if ended_early:
+                break
+            if accepted_word is None:
+                passes += 1
+                await ctx.send(f"⏱️ <@{user_id}> missed the turn. ({passes}/{len(player_ids)} consecutive passes.)", allowed_mentions=discord.AllowedMentions.none())
+                if passes >= len(player_ids):
+                    await ctx.send("The story pauses here: everyone missed a turn in a row.")
+                    break
+                continue
+
+            passes = 0
+            words.append(accepted_word)
+            scores[user_id] += 1
+            if constraint:
+                scores[user_id] += 2
+
+        if words:
+            final_text = " ".join(words)
+            if final_text[-1] not in ".!?…":
+                final_text += "."
+            final_text = discord.utils.escape_markdown(final_text).replace("@", "@\u200b")
+        else:
+            final_text = "No words made it into the story this time."
+
+        result = discord.Embed(title="📖 The story you made", description=final_text[:4000], color=discord.Color.green())
+        if scores:
+            ranking = sorted(scores, key=lambda uid: scores[uid], reverse=True)
+            result.add_field(
+                name="Story Points",
+                value="\n".join(f"<@{uid}> · **{scores[uid]}**" for uid in ranking),
+                inline=False,
+            )
+            best = scores[ranking[0]]
+            stars = [uid for uid in ranking if scores[uid] == best]
+            result.set_footer(text=f"Story MVP: {', '.join(f'<@{uid}>' for uid in stars)} · twist cards were worth +2 points")
+        artwork = await run_blocking(onewordstory_art_file, result, "onewordstory_final")
+        if artwork:
+            await ctx.send(embed=result, file=artwork, allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await ctx.send(embed=result, allowed_mentions=discord.AllowedMentions.none())
 
     @commands.hybrid_command(name="flames")
     async def flames(self, ctx, user1=None, user2=None):
-        """Remember the Flames from your school days?"""
-        user_regex = r'<@!?(\d+)>'
-        if user1 is not None and isinstance(user1, str):
-            m1 = re.match(user_regex, user1)
-            if m1 is not None and ctx.guild:
-                fetched = ctx.guild.get_member(int(m1.group(1)))
-                if fetched:
-                    user1 = fetched
-        if user2 is not None and isinstance(user2, str):
-            m2 = re.match(user_regex, user2)
-            if m2 is not None and ctx.guild:
-                fetched = ctx.guild.get_member(int(m2.group(1)))
-                if fetched:
-                    user2 = fetched
+        """Reveal the classic FLAMES result one burn at a time."""
+        supplied_first = user1 is not None
+        mention_pattern = re.compile(r"<@!?(\d+)>")
 
+        async def resolve_target(value):
+            if not isinstance(value, str):
+                return value
+            value = value.strip()
+            match = mention_pattern.fullmatch(value)
+            if match and ctx.guild:
+                member = ctx.guild.get_member(int(match.group(1)))
+                if member:
+                    return member
+                try:
+                    return await self.bot.fetch_user(int(match.group(1)))
+                except (discord.NotFound, discord.HTTPException):
+                    return value[:72]
+            return value[:72] or "Mystery"
+
+        user1 = await resolve_target(user1)
+        user2 = await resolve_target(user2)
         if user1 is None:
             user1 = ctx.author
-        elif user1 is not None and user2 is None:
-            user2 = user1
-            user1 = ctx.author
-        if user2 is None:
-            if ctx.guild and len(ctx.guild.members) > 1:
-                members_pool = [m for m in ctx.guild.members if m.id != user1.id]
-                user2 = random.choice(members_pool) if members_pool else ctx.author
-            else:
-                user2 = "Pippo"
+        if user2 is None and supplied_first:
+            user2, user1 = user1, ctx.author
+        elif user2 is None:
+            members = [member for member in getattr(ctx.guild, "members", []) if not member.bot and member.id != getattr(user1, "id", None)]
+            user2 = random.choice(members) if members else "Pippo"
 
-        def calculate_flames(name1, name2):
-            flames = "FLAMES"
-            result = []
+        first_name = (getattr(user1, "display_name", str(user1)).strip() or "Mystery")[:72]
+        second_name = (getattr(user2, "display_name", str(user2)).strip() or "Mystery")[:72]
+        first_letters = [character.casefold() for character in first_name if character.isalpha()]
+        remaining_second = [character.casefold() for character in second_name if character.isalpha()]
+        unmatched_first = []
+        for character in first_letters:
+            try:
+                remaining_second.remove(character)
+            except ValueError:
+                unmatched_first.append(character)
+        count = max(1, len(unmatched_first) + len(remaining_second))
 
-            name1 = name1.upper().replace(" ", "")
-            name2 = name2.upper().replace(" ", "")
+        active = list("FLAMES")
+        cursor = 0
+        steps = []
+        while len(active) > 1:
+            cursor = (cursor + count - 1) % len(active)
+            removed = active.pop(cursor)
+            steps.append((removed, "".join(active)))
+            if active:
+                cursor %= len(active)
 
-            for char in name1:
-                if char in name2:
-                    name2 = name2.replace(char, "", 1)
-                    continue
-                result.append(char)
-
-            count = len(result) + len(name2)
-            if count <= 0:
-                count = 1
-
-            while len(flames) > 1:
-                index = (count - 1) % len(flames)
-                flames = flames[:index] + flames[index+1:]
-
-            options = {"F": "👫 Friends", "L": "❤️ Lovers", "A": "😊 Affectionate", "M": "💍 Marriage", "E": "😡 Enemies", "S": "👦👧 Siblings"}
-            return options[flames], flames
-
-        def get_img_url(letter):
-            options = {
-                "F": "https://media.discordapp.net/attachments/1092244601525510154/1142797002778869910/F.png?width=400&height=300",
-                "L": "https://media.discordapp.net/attachments/1092244601525510154/1142797004469174292/L.png?width=400&height=300",
-                "A": "https://media.discordapp.net/attachments/1092244601525510154/1142797003345121350/A.png?width=400&height=300",
-                "M": "https://media.discordapp.net/attachments/1092244601525510154/1142797003630313502/M.png?width=400&height=300",
-                "E": "https://media.discordapp.net/attachments/1092244601525510154/1142797003928129626/E.png?width=400&height=300",
-                "S": "https://media.discordapp.net/attachments/1092244601525510154/1142797004154609774/S.png?width=400&height=300"
-            }
-            return options.get(letter, "")
-
-        name1 = getattr(user1, 'display_name', str(user1))
-        name2 = getattr(user2, 'display_name', str(user2))
-        relation, letter = calculate_flames(name1, name2)
-        names = f":maple_leaf:`{name1}`\n:maple_leaf:`{name2}`\n"
-        emb = discord.Embed(title="Flames", description=f"**{relation}**", color=discord.Color.red())
-        img = get_img_url(letter)
-        if img:
-            emb.set_image(url=img)
-        await ctx.reply(names, embed=emb)
+        outcomes = {
+            "F": "👫 Friends",
+            "L": "❤️ Lovers",
+            "A": "😊 Affection",
+            "M": "💍 Marriage",
+            "E": "😅 Enemies",
+            "S": "🧑‍🤝‍🧑 Siblings",
+        }
+        outcome = active[0]
+        view = FlamesView(ctx.author.id, first_name, second_name, count, steps, outcomes[outcome], outcome)
+        embed = await run_blocking(view.make_embed)
+        options = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+        files = [art for art in (view._pending_art, view._outcome_art) if art is not None]
+        if files:
+            options["files"] = files
+        view.message = await ctx.reply(**options)
 
     @commands.hybrid_command(name="what", aliases=["define", "ub", "urban_dictionary", "urban"])
-    async def meaning(self, ctx, query: str):
+    async def meaning(self, ctx, *, query: str):
         """
-        Query Urban dictionary to get the meaning of the word.
-        syntax: .what {word}
+        Browse community-written Urban Dictionary definitions for a word or phrase.
+        syntax: .what {word or phrase}
         """
+        query = " ".join(query.split())[:80]
+        if not query:
+            await ctx.reply("Give me a word or phrase to decode.", allowed_mentions=discord.AllowedMentions.none())
+            return
+
         try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
-                async with session.get(f"https://api.urbandictionary.com/v0/define?term={query}") as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        res = data.get('list', [])
-                    else:
-                        res = []
-        except Exception as e:
-            await ctx.reply("Could not reach Urban Dictionary right now.")
+            async with http_session(self.bot, timeout=aiohttp.ClientTimeout(total=8)) as session:
+                async with session.get("https://api.urbandictionary.com/v0/define", params={"term": query}) as resp:
+                    if resp.status != 200:
+                        raise aiohttp.ClientResponseError(
+                            resp.request_info, resp.history, status=resp.status, message="Urban Dictionary request failed"
+                        )
+                    data = await resp.json(content_type=None)
+                    results = data.get("list", []) if isinstance(data, dict) else []
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            await ctx.reply(
+                "Could not reach Urban Dictionary right now. Give it another try in a moment.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             return
 
-        if not res:
-            await ctx.reply(f"No definitions found for **{query}** on Urban Dictionary.")
-            return
+        def clean_text(value, limit):
+            value = html.unescape(str(value or "")).replace("[", "").replace("]", "")
+            value = " ".join(value.split())
+            return discord.utils.escape_markdown(value, as_needed=False)[:limit]
 
-        toSend = f"**Urban Dictionary: {query}**\n"
-        j = 1
-        for i in res:
-            defn = i.get('definition', '').replace("[", "").replace("]", "")
-            if len(defn) <= 600:
-                toSend += f"```{j}. {defn}```\n"
-                j += 1
-            if j == 4:
+        entries = []
+        seen_definitions = set()
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            definition = clean_text(result.get("definition"), 3600)
+            if not definition or definition.casefold() in seen_definitions:
+                continue
+            seen_definitions.add(definition.casefold())
+            entries.append({
+                "definition": definition,
+                "example": clean_text(result.get("example"), 900),
+                "author": clean_text(result.get("author"), 80),
+                "thumbs_up": result.get("thumbs_up", 0),
+                "thumbs_down": result.get("thumbs_down", 0),
+            })
+            if len(entries) == 12:
                 break
-        await ctx.reply(toSend)
+
+        safe_query = clean_text(query, 120)
+        if not entries:
+            await ctx.reply(
+                f"No definitions found for **{safe_query}** on Urban Dictionary.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            return
+
+        def render_card(entry, page, total):
+            embed = discord.Embed(
+                title=f"📖 Urban Dictionary: {safe_query}"[:256],
+                description=entry["definition"],
+                color=discord.Color.from_rgb(255, 190, 76),
+            )
+            if entry["example"]:
+                embed.add_field(name="In the wild", value=entry["example"], inline=False)
+            author = entry["author"] or "Community contributor"
+            embed.set_author(name=f"Definition {page} of {total} · by {author}"[:256])
+            try:
+                upvotes = max(0, int(entry["thumbs_up"]))
+                downvotes = max(0, int(entry["thumbs_down"]))
+            except (TypeError, ValueError):
+                upvotes, downvotes = 0, 0
+            embed.set_footer(text=f"👍 {upvotes:,}   👎 {downvotes:,} · Community-written; tone and accuracy vary")
+            artwork = what_art_file(embed, f"what-{page}")
+            return embed, artwork
+
+        view = DefinitionBrowserView(ctx.author.id, entries, query, render_card)
+        embed, artwork = await run_blocking(render_card, entries[0], 1, len(entries))
+        options = {
+            "embed": embed,
+            "view": view,
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if artwork:
+            options["file"] = artwork
+        view.message = await ctx.reply(**options)
 
 
 async def setup(bot):
